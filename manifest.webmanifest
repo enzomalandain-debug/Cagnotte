@@ -1,0 +1,13 @@
+{
+  "name": "La Cagnotte",
+  "short_name": "Cagnotte",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ECF0F3",
+  "theme_color": "#1C4C9A",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
