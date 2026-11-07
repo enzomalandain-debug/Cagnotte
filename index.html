@@ -583,6 +583,11 @@ function vSet(c){
   <p class="note">Choisis « Enregistrer dans Fichiers » puis iCloud Drive. Pour tout retrouver sur un autre téléphone, importe ce fichier.</p>
 </section>
 <section class="card">
+  <h2>Appli <small>${APP_VERSION}</small></h2>
+  <p class="sub">Après avoir remplacé index.html sur GitHub, attends une à deux minutes puis touche le bouton. Tes données ne sont pas touchées.</p>
+  <button class="btn ghost block" data-act="force-update">Mettre à jour l’appli</button>
+</section>
+<section class="card">
   <h2>Livret</h2>
   <div class="rows">${row(`Solde de référence<div class="note">relevé ${fmtDateTime(st.anchorAt)}</div>`,eur(st.anchorBalance))}</div>
   ${W()?`<button class="btn ghost block" data-act="recal">Recaler sur le solde de la banque</button>`:''}
@@ -1225,6 +1230,7 @@ view.addEventListener('click',e=>{
   else if(a==='cell')sheetCell(b.dataset.p,b.dataset.m);
   else if(a==='extra-new'){if(W())sheetExtra()}
   else if(a==='extra-del'){const id=b.dataset.id;if(S.delArm!==id){S.delArm=id;render();return}S.delArm=null;w(()=>S.db.doc('extras/'+id).delete(),'Virement retiré')}
+  else if(a==='force-update')forceUpdate(b);
   else if(a==='backup')exportBackup();
   else if(a==='import')pickImport();
   else if(a==='share-state')sheetNotify(null);
@@ -1270,6 +1276,19 @@ view.addEventListener('change',async e=>{
   if(t.dataset.set)await w(()=>S.db.doc('settings/main').update({[t.dataset.set]:v}),'Enregistré');
   else if(t.dataset.pid)await w(()=>S.db.doc('people/'+t.dataset.pid).update({[t.dataset.pf]:v}),'Enregistré');
 });
+
+/* ---------- version et mise à jour ---------- */
+const APP_VERSION='v2 · 7 nov. 2026';
+/* Vide la copie hors connexion (pas les données) et recharge la dernière version publiée. */
+async function forceUpdate(btn){
+  if(btn){btn.disabled=true;btn.textContent='Mise à jour…'}
+  if(!navigator.onLine){toast('Pas de connexion : réessaie avec du réseau');if(btn){btn.disabled=false;btn.textContent='Mettre à jour l’appli'}return}
+  try{
+    if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();for(const r of regs){try{await r.unregister()}catch(e){}}}
+    if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)))}
+  }catch(e){}
+  location.replace(location.pathname+'?maj='+Date.now()+'#reglages');
+}
 
 /* ---------- stockage sur le téléphone ---------- */
 const LS_KEY='la-cagnotte-donnees',META_KEY='la-cagnotte-meta';
@@ -1354,6 +1373,7 @@ function sheetImport(d,at){
 
 /* ---------- boot ---------- */
 function boot(){
+  if(/[?&]maj=/.test(location.search)){try{history.replaceState(null,'',location.pathname+location.hash)}catch(e){}setTimeout(()=>toast('Appli à jour : '+APP_VERSION),400)}
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
   S.db=makeLocalDB();S.canWrite=true;
   render();
