@@ -203,6 +203,20 @@ h3.mini{font-family:var(--f-display);font-size:16px;margin:14px 0 2px}
 .checks{display:flex;gap:6px 18px;flex-wrap:wrap;margin:-2px 0 12px}
 .check{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500}
 .check input{width:20px;height:20px;accent-color:var(--accent)}
+.pos{color:var(--ok)}
+.plancard{box-shadow:inset 0 0 0 2px var(--accent)}
+.planlist{margin:4px 0 6px;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:14px;line-height:1.4}
+.restflow{margin-top:8px}
+.restflow>span{font-size:12.5px;font-weight:600;color:var(--muted)}
+.restflow .sched{background:var(--surface);margin:4px 0 0}
+.dellist{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.pchips{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.pchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface-2);border-radius:999px;padding:5px 12px;font-weight:600;font-size:14px;min-height:34px;color:var(--ink)}
+.pchip small{font-size:11px;font-weight:600;color:var(--accent)}
+.pchip.guest{border-color:var(--accent);background:var(--accent-soft)}
+.pchip .x{width:22px;height:22px;font-size:15px;margin:0 -6px 0 -2px;background:transparent}
+.pchip.add{border-style:dashed;color:var(--accent);background:transparent}
+.row .r small.st{font-size:12.5px;font-weight:600}
 .calckeys{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
 .calckeys button{flex:1 1 0;min-width:30px;max-width:52px;height:34px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);font-size:19px;font-weight:600;line-height:1;padding:0;touch-action:manipulation}
 .calckeys button:active{background:var(--accent-soft)}
@@ -302,6 +316,31 @@ function fmtDate(s){if(!s)return '';const [y,m,d]=s.split('-').map(Number);retur
 function fmtDateTime(iso){if(!iso)return '';const d=new Date(iso);if(isNaN(d))return '';return `le ${d.getDate()} ${MOIS_C[d.getMonth()]} à ${pad(d.getHours())}:${pad(d.getMinutes())}`}
 const payKey=(pid,m)=>pid+'_'+m;
 const sumPay=e=>(e.payments||[]).reduce((s,x)=>s+(+x.amount||0),0);
+/* Un paiement « by » a été avancé par une personne : il ne sort pas du livret. */
+const potPay=e=>(e.payments||[]).reduce((s,x)=>s+(x.by?0:(+x.amount||0)),0);
+const expCost=e=>{const pd=sumPay(e);return e.rest||e.closed||e.planned==null?pd:Math.max(+e.planned,pd)};
+const projGuests=pr=>(pr&&Array.isArray(pr.guests)?pr.guests:[]).filter(g=>g&&g.id);
+function partName(pr,id){if(!id||id==='pot')return 'la cagnotte';if(S.people[id])return S.people[id].name;const g=projGuests(pr).find(g=>g.id===id);return g?g.name:'quelqu’un'}
+/* Dernier versement : le mois du voyage (par défaut) ou le mois d'avant. */
+const lastPayMonth=(trip,rule)=>rule==='before'?addMonth(trip,-1):trip;
+const isMonth=v=>/^\d{4}-\d{2}$/.test(v||'');
+function payCount(first,trip,rule){if(!isMonth(first)||!isMonth(trip))return 0;const l=lastPayMonth(trip,rule);return l>=first?monthsBetween(first,l).length:0}
+function endRuleOf(pr){if(pr.endRule)return pr.endRule;if(pr.firstMonth&&+pr.installments>0&&isMonth(pr.month)&&+pr.installments===payCount(pr.firstMonth,pr.month,'before'))return 'before';return 'trip'}
+/* Prévient quand les cotisations d'un voyage commencent tard : moins de mois = mensualités plus grosses. */
+function lateStartNote(first,trip,rule){
+  const nf=nextFreeMonth();if(!isMonth(first)||first<=nf)return '';
+  const n2=payCount(nf,trip,rule);if(!n2)return '';
+  return `<br><span class="neg">Rien ne va à ce voyage avant ${mShort(first)}.</span> En commençant dès ${mShort(nf)}, ce serait ${n2} mensualités au lieu de ${payCount(first,trip,rule)}.`;
+}
+function monthsMsg(first,trip,rule){
+  if(!isMonth(trip))return 'Indique le mois du voyage.';
+  if(!isMonth(first))return 'Choisis le mois du premier versement.';
+  const n=payCount(first,trip,rule);
+  if(!n)return rule==='before'?'Le premier versement doit être avant le mois du voyage.':'Le premier versement doit être au plus tard le mois du voyage.';
+  if(n>120)return 'C’est plus de 10 ans de versements : vérifie les dates.';
+  return '';
+}
+const capFirst=s=>s?s.charAt(0).toUpperCase()+s.slice(1):s;
 const byOrder=(a,b)=>(a.order??99)-(b.order??99);
 function sortedPeople(){return Object.values(S.people).sort((a,b)=>byOrder(a,b)||String(a.name).localeCompare(String(b.name),'fr'))}
 function sortedExpenses(){return Object.values(S.expenses).sort((a,b)=>byOrder(a,b)||String(a.label).localeCompare(String(b.label),'fr'))}
@@ -345,7 +384,13 @@ function calc(){
   let vIn=0,vOut=0,newIn=0,newOut=0;
   for(const p of Object.values(S.payments)){vIn+=+p.ski||0;if(isNew(p))newIn+=+p.amount||0}
   for(const x of Object.values(S.extras)){if(x.target!=='credit')vIn+=+x.amount||0;if(isNew(x))newIn+=+x.amount||0}
-  for(const e of Object.values(S.expenses))for(const x of e.payments||[]){vOut+=+x.amount||0;if(isNew(x))newOut+=+x.amount||0}
+  for(const e of Object.values(S.expenses))for(const x of e.payments||[]){if(x.by)continue;vOut+=+x.amount||0;if(isNew(x))newOut+=+x.amount||0}
+  /* Remboursements d'un voyage : vers la cagnotte (un invité paie sa part) ou depuis la cagnotte (rembourser une avance). */
+  for(const pr of Object.values(S.projects))for(const s of pr.settles||[]){
+    const a=+s.amount||0;
+    if(s.to==='pot'&&s.from!=='pot'){vIn+=a;if(isNew(s))newIn+=a}
+    else if(s.from==='pot'&&s.to!=='pot'){vOut+=a;if(isNew(s))newOut+=a}
+  }
   for(const x of Object.values(S.moves)){
     const a=+x.amount||0;
     if(x.dir==='transfer'){vIn+=a;continue}
@@ -373,19 +418,25 @@ function calc(){
   const prs=sortedProjects(),WIN={};let prevM=null;
   const plannedOf=id=>r2(sortedExpenses().filter(e=>expProject(e)===id).reduce((s,e)=>{const pd=sumPay(e);return s+(e.rest||e.closed||e.planned==null?pd:Math.max(+e.planned,pd))},0));
   for(const pr of prs){
-    let ms=[];
-    if(pr.firstMonth&&+pr.installments>0)ms=monthsBetween(pr.firstMonth,addMonth(pr.firstMonth,+pr.installments-1));
-    else if(pr.month)ms=monthsBetween([start,prevM?addMonth(prevM):start].sort().pop(),pr.month);
-    if(pr.month)prevM=pr.month;
+    /* Ancienne règle (projet sans dates de cotisation) : il commence après le voyage précédent.
+       Un projet qui a ses propres mois ne compte comme « précédent » que s'il a commencé avant :
+       un voyage préparé en parallèle (ex. Ski 2027 pendant Voyage 2028) ne raccourcit plus les autres. */
+    const legacyStart=[start,prevM?addMonth(prevM):start].sort().pop();
+    let ms=[],own=true;
+    if(pr.firstMonth&&pr.endRule&&pr.month)ms=monthsBetween(pr.firstMonth,lastPayMonth(pr.month,pr.endRule));
+    else if(pr.firstMonth&&+pr.installments>0)ms=monthsBetween(pr.firstMonth,addMonth(pr.firstMonth,+pr.installments-1));
+    else if(pr.month){ms=monthsBetween(legacyStart,pr.month);own=false}
+    if(pr.month&&(!own||(ms.length&&ms[0]<legacyStart)))prevM=pr.month;
     const mem=Array.isArray(pr.members)&&pr.members.length?pr.members.filter(id=>S.people[id]):active.filter(p=>ms.some(m=>inPeriod(p,m,start)&&shareFor(p,m).ski>0)).map(p=>p.id);
     /* Financement : « monthly » = mensualité connue, « expenses » = prix estimé avec les dépenses prévues,
        « goal » = prix total connu. */
     let mode=null,goal=null,perMonth=null;
     if(pr.mode==='monthly'){if(+pr.perMonth>0){mode='monthly';perMonth=+pr.perMonth}}
     else if(pr.mode==='expenses'){mode='expenses';const g=plannedOf(pr.id);goal=g>0?g:null}
+    else if(pr.mode==='rest')mode='rest';
     else if(+pr.goal>0){mode='goal';goal=+pr.goal}
     /* creditIn : la mensualité saisie comprend la part crédit (ex. 150 € = 100 € voyage + 50 € crédit). */
-    WIN[pr.id]={ms,set:new Set(ms),mem,memSet:new Set(mem),mode,goal,perMonth,creditIn:mode==='monthly'&&pr.creditIncluded!==false,
+    WIN[pr.id]={ms,set:new Set(ms),mem,memSet:new Set(mem),mode,goal,perMonth,total:mode==='rest'?(+pr.total||null):null,creditIn:mode==='monthly'&&pr.creditIncluded!==false,
       theo:mode==='monthly'?perMonth:goal&&ms.length&&mem.length?goal/(ms.length*mem.length):null};
   }
   /* Ce qui va au voyage pour une personne et un mois. Tant que le crédit court, sa part est retirée de la mensualité
@@ -426,9 +477,9 @@ function calc(){
   const proj={},order=[],live=[];
   for(const pr of prs){
     const exps=sortedExpenses().filter(e=>expProject(e)===pr.id);
-    let paid=0,planned=0,remaining=0;const unest=[],rest=[];
+    let paid=0,paidAll=0,planned=0,remaining=0;const unest=[],rest=[];
     for(const e of exps){
-      const pd=sumPay(e);paid+=pd;
+      const pd=sumPay(e);paid+=potPay(e);paidAll+=pd;
       if(e.rest){rest.push(e);planned+=pd}
       else if(e.closed){planned+=pd}
       else if(e.planned==null){unest.push(e);planned+=pd}
@@ -448,13 +499,61 @@ function calc(){
       const t=split(p,m,shareFor(p,m).ski).find(z=>z[0]===pr.id);if(t)expected+=t[1];
     }
     const crCut=Object.keys(cuts).length?+Object.keys(cuts).sort((a,b)=>cuts[b]-cuts[a])[0]:0;
-    const collected=r2(col[pr.id]);
-    const x={pr,exps,paid:r2(paid),planned:r2(planned),remaining:r2(remaining),unest,rest,end,passed:!!(end&&today>end),
-      win:w.ms,members:w.mem,mode:w.mode,goal:w.goal,perMonth:w.perMonth,theo:w.theo,creditIn:w.creditIn,crCut,crLast,collected,balance:r2(collected-paid),expected:r2(expected),U,next:null};
-    x.available=r2(x.balance+x.expected-x.remaining);
-    x.projected=r2(collected+x.expected);
-    if(w.goal){x.toCollect=r2(Math.max(w.goal-collected,0));x.needed=U>0?x.toCollect/U:null}
-    if(w.perMonth)x.budget=r2(collected+bud);
+    /* Comptes du voyage (façon Tricount). Participants = cotisants du projet + invités.
+       Chaque dépense est partagée entre les participants concernés (tout le monde par défaut).
+       Les cotisants paient leur part avec la cagnotte ; un invité doit sa part ; une avance est due à celui qui l'a faite. */
+    const guests=projGuests(pr),guestSet=new Set(guests.map(g=>g.id));
+    const parts=w.mem.concat(guests.map(g=>g.id)),partSet=new Set(parts);
+    const share={},credit={};parts.forEach(id=>{share[id]=0;credit[id]=0});
+    for(const e of exps){
+      const cost=expCost(e);
+      let C=Array.isArray(e.split)&&e.split.length?e.split.filter(id=>partSet.has(id)):[];if(!C.length)C=parts;
+      C.forEach(id=>{share[id]+=cost/C.length});
+      for(const q of e.payments||[])if(q.by)credit[q.by]=(credit[q.by]||0)+(+q.amount||0);
+    }
+    let setIn=0,setOut=0,guestIn=0;
+    for(const s of pr.settles||[]){
+      const a=+s.amount||0;if(s.from===s.to)continue;
+      if(s.from!=='pot')credit[s.from]=(credit[s.from]||0)+a;
+      if(s.to!=='pot')credit[s.to]=(credit[s.to]||0)-a;
+      if(s.to==='pot'){setIn+=a;if(guestSet.has(s.from))guestIn+=a}
+      if(s.from==='pot')setOut+=a;
+    }
+    const bal={};let toReceive=0,toRepay=0,guestShare=0;
+    for(const id of new Set(Object.keys(credit).concat(guests.map(g=>g.id)))){
+      const b=r2((credit[id]||0)-(guestSet.has(id)?share[id]:0));
+      if(guestSet.has(id))guestShare+=share[id];
+      if(Math.abs(b)>0.005||guestSet.has(id))bal[id]=b;
+      if(b<-0.005)toReceive+=-b;else if(b>0.005)toRepay+=b;
+    }
+    const ledger={parts,guests,share,credit,bal,guestShare:r2(guestShare),guestIn:r2(guestIn),toReceive:r2(toReceive),toRepay:r2(toRepay),
+      settles:[...(pr.settles||[])].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.recordedAt).localeCompare(String(a.recordedAt))),
+      cost:r2(exps.reduce((s,e)=>s+expCost(e),0)),
+      active:guests.length>0||Object.keys(bal).length>0||(pr.settles||[]).length>0};
+    const collected=r2(col[pr.id]+setIn);paid+=setOut;
+    const x={pr,exps,paid:r2(paid),paidAll:r2(paidAll),planned:r2(planned),remaining:r2(remaining),unest,rest,end,passed:!!(end&&today>end),
+      win:w.ms,members:w.mem,mode:w.mode,goal:w.goal,perMonth:w.perMonth,theo:w.theo,creditIn:w.creditIn,crCut,crLast,collected,balance:r2(collected-paid),expected:r2(expected),U,next:null,ledger};
+    /* ce que les invités doivent encore verser s'ajoute, les avances à rembourser se retirent */
+    x.available=r2(x.balance+x.expected-x.remaining+ledger.toReceive-ledger.toRepay);
+    const cotCollected=r2(collected-ledger.guestIn);
+    x.projected=r2(cotCollected+x.expected+ledger.guestShare);
+    if(w.goal){x.toCollect=r2(Math.max(w.goal-cotCollected-ledger.guestShare,0));x.needed=U>0?x.toCollect/U:null}
+    if(w.perMonth)x.budget=r2(cotCollected+bud+ledger.guestShare);
+    /* « Le reste » : la cotisation ne change pas ; ce voyage reçoit ce qui reste après le crédit et les autres voyages. */
+    if(w.mode==='rest'){
+      x.budget=x.projected;x.total=w.total;x.flow={};x.restZero=[];x.rateOff=[];
+      for(const pid of w.mem){
+        const p=S.people[pid];if(!p)continue;const arr=[];
+        for(const m of w.ms){
+          if(!inPeriod(p,m,start))continue;
+          const pay=S.payments[payKey(pid,m)],a=pay?(+pay.ski||0):shareFor(p,m).ski;
+          const t=split(p,m,a).find(z=>z[0]===pr.id),v=r2(t?t[1]:0);arr.push([m,v]);
+          if(!pay&&v<0.5&&!x.restZero.includes(pid))x.restZero.push(pid);
+          if(!pay&&w.total&&Math.abs(rateFor(p,m).monthly-w.total)>0.005&&!x.rateOff.includes(pid))x.rateOff.push(pid);
+        }
+        x.flow[pid]=arr;
+      }
+    }
     x.target=w.mode==='monthly'?w.perMonth:(x.needed!=null&&x.toCollect>0.005?ceilE(x.needed):null);
     proj[pr.id]=x;order.push(pr.id);if(!x.passed)live.push(x);
   }
@@ -510,12 +609,16 @@ function creditCard(c,hz){
 }
 function budgetBlock(c,x,full){
   const pr=x.pr,id=esc(pr.id),rows=[];
-  rows.push(row(`Collecté pour ce projet<div class="note">${winText(x)}</div>`,eur(x.collected)));
-  if(x.paid>0)rows.push(row('Dépenses déjà payées','− '+eur(x.paid)));
+  const L=x.ledger;
+  rows.push(row(`Collecté pour ce projet<div class="note">${winText(x)}${L.guestIn>0.005?` · dont ${eur(L.guestIn)} des invités`:''}</div>`,eur(x.collected)));
+  const reimb=L.settles.some(s=>s.from==='pot'&&s.to!=='pot'),adv=x.exps.some(e=>(e.payments||[]).some(q=>q.by));
+  if(x.paid>0)rows.push(row(`Dépenses déjà payées${reimb?'<div class="note">par la cagnotte, remboursements compris</div>':adv?'<div class="note">par la cagnotte</div>':''}`,'− '+eur(x.paid)));
   if(x.expected>0)rows.push(row(`Versements encore attendus${x.passed?'<div class="note">retards</div>':''}`,'+ '+eur(x.expected)));
+  if(L.toReceive>0.005)rows.push(row(`Encore dû à la cagnotte<div class="note">part des invités${L.guests.length?'':' et autres'}</div>`,'+ '+eur(L.toReceive)));
+  if(L.toRepay>0.005)rows.push(row(`Avances à rembourser<div class="note">payées de leur poche</div>`,'− '+eur(L.toRepay)));
   if(x.remaining>0)rows.push(row('Reste à payer sur les dépenses','− '+eur(x.remaining)));
   const lbl=x.passed?'Reste sur ce projet':x.rest.length?'Reste pour '+restNames(x):x.exps.length?'Marge':'Budget prévu';
-  const cond=x.expected>0?'<div class="note">si tout le monde paie</div>':'';
+  const cond=x.expected>0||L.toReceive>0.005?'<div class="note">si tout le monde paie</div>':'';
   rows.push(`<div class="row total"><div class="l">${lbl}${cond}</div><div class="r ${x.available<0?'neg':''}">${eur(x.available)}</div></div>`);
   let more=x.passed?'':dayBudget(x);
   if(!x.win.length&&!x.passed)more+=`<p class="note">Ce projet ne reçoit encore aucun versement. Fixe un objectif pour choisir ses mois de versement.</p>`;
@@ -531,6 +634,25 @@ function budgetBlock(c,x,full){
 function goalCard(c,x){
   const pr=x.pr,id=esc(pr.id),edit=W()&&!x.passed;
   if(!x.mode)return `<section class="card"><h2>Financement</h2><p class="note" style="margin-top:0">Tu connais la mensualité : l’appli calcule le budget. Tu listes les dépenses : l’appli calcule le prix du voyage, puis la mensualité.</p>${edit?`<div class="actions" style="margin-top:10px"><button class="btn block" data-act="goal-edit" data-id="${id}">Choisir le financement</button></div>`:''}</section>`;
+  if(x.mode==='rest'){
+    const tot=x.total||0,pctR=x.budget>0?Math.min(x.collected/x.budget*100,100):0;
+    const rowsR=[
+      row('Cotisation par personne',`${eur(tot)} / mois en tout`),
+      row(`Mensualités<div class="note">${winText(x).replace(/^\d+ mensualités?, /,'')}</div>`,String(x.win.length)),
+      ...(x.ledger.guestShare>0.005?[row(`Part des invités<div class="note">${esc(x.ledger.guests.map(g=>g.name).join(', '))} · s’ajoute au budget</div>`,'+ '+eur(x.ledger.guestShare))]:[]),
+      row(`${x.ledger.guests.length?'Cotisants':'Participants'}<div class="note">${esc(namesOf(x.members))}</div>`,String(x.members.length)),
+      row(`Déjà collecté<div class="bar" style="width:140px"><i style="width:${pctR}%"></i></div>`,eur(x.collected))
+    ];
+    let moreR=`<h3 class="mini">Ce qui va à ce voyage chaque mois</h3>${flowHtml(x)}<p class="note">Sur les ${eur(tot)} de chacun, le crédit passe d’abord, puis les voyages qui ont un prix ou une mensualité. Ce voyage prend le reste.</p>`;
+    if(x.restZero.length&&!x.passed)moreR+=`<p class="warn">Certains mois, il ne reste rien pour ce voyage (${esc(namesOf(x.restZero))}) : les autres voyages prennent toute la part.</p>`;
+    if(x.rateOff.length&&!x.passed)moreR+=`<p class="warn">La cotisation de ${esc(namesOf(x.rateOff))} n’est pas à ${eur(tot)} sur ces mois. Touche « Mettre à jour les cotisations ».</p>`;
+    if(x.planned>x.budget+0.005)moreR+=`<p class="warn">Les dépenses prévues (${eur(x.planned)}) dépassent le budget de ${eur(x.planned-x.budget)}.</p>`;
+    else if(x.planned>0)moreR+=`<p class="note">Dépenses prévues : ${eur(x.planned)}, il reste ${eur(x.budget-x.planned)}.</p>`;
+    return `<section class="card"><h2>Financement <small>le reste de la cotisation</small></h2>
+      <div class="goalbig"><span>Budget prévu</span><b>${eur(x.budget)}</b><span>avec ce qui reste des ${eur(tot)} de chacun${x.collected>0.005?` · ${eur(x.collected)} déjà collectés`:''}</span></div>
+      <div class="rows">${rowsR.join('')}</div>${moreR}
+      ${edit?`<div class="actions">${x.U>0?`<button class="btn" data-act="goal-apply" data-id="${id}">Mettre à jour les cotisations</button>`:''}<button class="btn ghost" data-act="goal-edit" data-id="${id}">Modifier</button></div>`:''}</section>`;
+  }
   if(x.mode==='expenses'&&!x.goal)return `<section class="card"><h2>Financement <small>prix estimé avec les dépenses</small></h2><p class="note" style="margin-top:0">Ajoute les dépenses prévues (logement, essence, péages, courses…) : l’appli additionne pour estimer le prix, puis calcule la mensualité par personne.</p>${edit?`<div class="actions" style="margin-top:10px"><button class="btn" data-act="exp-new" data-id="${id}">Ajouter une dépense</button><button class="btn ghost" data-act="goal-edit" data-id="${id}">Modifier</button></div>`:''}</section>`;
   const m=x.members.length,cap=x.mode==='monthly'?x.budget:x.goal,pct=cap>0?Math.min(x.collected/cap*100,100):0;
   const names=x.members.map(i=>S.people[i]?S.people[i].name:'').filter(Boolean).join(', ');
@@ -538,18 +660,19 @@ function goalCard(c,x){
   const crIn=x.mode==='monthly'&&x.creditIn&&crTxt;
   let head;
   if(x.mode==='monthly')head=`<div class="goalbig"><span>Budget prévu</span><b>${eur(x.budget)}</b><span>avec ${eur(x.perMonth)} par personne et par mois${crIn?`, dont ${crTxt}`:!x.creditIn&&crTxt?`, plus ${crTxt}`:''}${x.collected>0.005?` · ${eur(x.collected)} déjà collectés`:''}</span></div>`;
-  else if(x.toCollect<=0.005)head=`<p class="warn" style="background:var(--ok-soft);color:var(--ok);margin:0 0 12px">Objectif atteint : ${eur(x.collected)} collectés.</p>`;
+  else if(x.toCollect<=0.005)head=`<p class="warn" style="background:var(--ok-soft);color:var(--ok);margin:0 0 12px">${x.ledger.guestShare>0.005?`Part des cotisants réunie : ${eur(x.collected-x.ledger.guestIn)} collectés.${x.ledger.toReceive>0.005?` Les invités doivent encore ${eur(x.ledger.toReceive)}.`:''}`:`Objectif atteint : ${eur(x.collected)} collectés.`}</p>`;
   else if(x.needed==null)head=`<p class="warn" style="margin:0 0 12px">Toutes les mensualités sont passées et il manque ${eur(x.toCollect)}.${W()?' <button class="linkbtn" data-act="extra-new">Virement exceptionnel</button>':''}</p>`;
   else{
     const per=ceilE(x.needed),exact=Math.abs(per-x.needed)>0.004;
-    head=`<div class="goalbig"><span>À mettre par personne</span><b>${eur(per)}<small> / mois</small></b><span>${exact?`${eur(x.needed)} exactement · `:''}soit ${eur(per*m)} par mois pour ${m} participant${m>1?'s':''}</span></div>`;
+    head=`<div class="goalbig"><span>À mettre par personne</span><b>${eur(per)}<small> / mois</small></b><span>${exact?`${eur(x.needed)} exactement · `:''}soit ${eur(per*m)} par mois pour ${m} ${x.ledger.guests.length?'cotisant':'participant'}${m>1?'s':''}</span></div>`;
     if(crTxt)head+=`<p class="note" style="margin:-6px 0 12px">Le crédit s’ajoute : + ${crTxt}.</p>`;
   }
   const rows=[
     x.mode==='goal'?row('Objectif',eur(x.goal)):x.mode==='expenses'?row(`Prix estimé<div class="note">total des ${x.exps.length} dépense${x.exps.length>1?'s':''} prévue${x.exps.length>1?'s':''}</div>`,eur(x.goal)):row(`Mensualité par personne${crIn?'<div class="note">crédit compris</div>':''}`,eur(x.perMonth)+' / mois'),
     ...(crIn?[row(`Pour le voyage<div class="note">le crédit finit en ${mYear(x.crLast).toLowerCase()}</div>`,x.crLast<x.win[x.win.length-1]?`${eur(Math.max(x.perMonth-x.crCut,0))} puis ${eur(x.perMonth)}`:eur(Math.max(x.perMonth-x.crCut,0)))]:[]),
     row(`Mensualités<div class="note">${winText(x).replace(/^\d+ mensualités?, /,'')}</div>`,String(x.win.length)),
-    row(`Participants<div class="note">${esc(names)}</div>`,String(m)),
+    ...(x.ledger.guestShare>0.005?[row(`Part des invités<div class="note">${esc(x.ledger.guests.map(g=>g.name).join(', '))} · ${x.mode==='monthly'?'s’ajoute au budget':'payée à part'}</div>`,(x.mode==='monthly'?'+ ':'− ')+eur(x.ledger.guestShare))]:[]),
+    row(`${x.ledger.guests.length?'Cotisants':'Participants'}<div class="note">${esc(names)}</div>`,String(m)),
     row(`Déjà collecté<div class="bar" style="width:140px"><i style="width:${pct}%"></i></div>`,eur(x.collected))
   ];
   let more='';
@@ -574,7 +697,7 @@ function vHome(c){
   const cur=c.current&&c.proj[c.current];
   const after=cur&&cur.next;
   const hz=MOIS[+c.horizon.slice(5)-1];
-  return `${backupWarn()}
+  return `${backupWarn()}${planHome(c)}
 <section class="ticket" aria-label="Solde de la cagnotte">
   <div class="ticket-main">
     <div class="eyebrow">Sur le livret · estimé aujourd’hui</div>
@@ -601,7 +724,7 @@ ${cur?`<section class="card">
 </section>
 ${after?`<section class="card">
   <h2>Ensuite : ${esc(after.pr.name)} <small>${esc(projDate(after.pr))}</small></h2>
-  <div class="rows">${after.mode==='expenses'&&!after.goal?row('Prix estimé','à compléter'):(after.mode==='goal'||after.mode==='expenses')?row(after.mode==='goal'?'Objectif':'Prix estimé',eur(after.goal))+(after.target!=null?row('À mettre par personne',eur(after.target)+' / mois'):row('Déjà collecté',eur(after.collected))):after.mode==='monthly'?row('Mensualité par personne',eur(after.perMonth)+' / mois')+row('Budget prévu',eur(after.budget)):row('Collecté pour ce projet',eur(after.collected))+row(`Budget prévu<div class="note">avec les versements attendus</div>`,`<span class="${after.available<0?'neg':''}">${eur(after.available)}</span>`)}</div>
+  <div class="rows">${after.mode==='rest'?row('Cotisation','le reste des '+eur(after.total||0))+row('Budget prévu',eur(after.budget)):after.mode==='expenses'&&!after.goal?row('Prix estimé','à compléter'):(after.mode==='goal'||after.mode==='expenses')?row(after.mode==='goal'?'Objectif':'Prix estimé',eur(after.goal))+(after.target!=null?row('À mettre par personne',eur(after.target)+' / mois'):row('Déjà collecté',eur(after.collected))):after.mode==='monthly'?row('Mensualité par personne',eur(after.perMonth)+' / mois')+row('Budget prévu',eur(after.budget)):row('Collecté pour ce projet',eur(after.collected))+row(`Budget prévu<div class="note">avec les versements attendus</div>`,`<span class="${after.available<0?'neg':''}">${eur(after.available)}</span>`)}</div>
   ${after.mode?'':`<p class="note">Pas encore de financement. <a class="linkbtn" href="#voyages" data-act="go-proj" data-id="${esc(after.pr.id)}">Le choisir</a></p>`}
 </section>`:''}`:stateCard('Aucun voyage en cours','Crée un projet dans l’onglet Voyages pour suivre son budget.')}
 ${creditCard(c,hz)}`;
@@ -677,14 +800,52 @@ function expRow(e,x){
   return `<div class="exp"><button class="exp-main" data-act="exp" data-e="${id}"><div class="exp-top"><span class="exp-name">${esc(e.label)}</span><span class="exp-amt">${right}</span></div><div class="exp-meta">${chip}${meta?`<span class="muted">${meta}</span>`:''}</div>${pct!=null?`<div class="bar"><i style="width:${pct}%"></i></div>`:''}</button>${canPay?`<button class="btn small ghost" data-act="exp-pay" data-e="${id}">${e.rest?'+ Dépense':'Payer'}</button>`:''}</div>`;
 }
 
+/* Ce qu'il faut verser pour que tout le monde soit quitte : tout passe par la cagnotte. */
+function settleSuggestions(x){
+  const out=[];
+  for(const [id,b] of Object.entries(x.ledger.bal)){if(b<-0.005)out.push({from:id,to:'pot',amount:r2(-b)});else if(b>0.005)out.push({from:'pot',to:id,amount:r2(b)})}
+  return out.sort((a,b)=>(a.to==='pot'?0:1)-(b.to==='pot'?0:1)||b.amount-a.amount);
+}
+function settleText(pr,s){
+  if(s.to==='pot')return `<b>${esc(partName(pr,s.from))}</b> verse ${eur(s.amount)} à la cagnotte`;
+  if(s.from==='pot')return `La cagnotte rembourse ${eur(s.amount)} à <b>${esc(partName(pr,s.to))}</b>`;
+  return `<b>${esc(partName(pr,s.from))}</b> donne ${eur(s.amount)} à <b>${esc(partName(pr,s.to))}</b>`;
+}
+function tricountCard(c,x){
+  const pr=x.pr,L=x.ledger,id=esc(pr.id),edit=W();
+  const gSet=new Set(L.guests.map(g=>g.id));
+  const chips=L.parts.map(p=>{const g=gSet.has(p);return `<span class="pchip${g?' guest':''}">${esc(partName(pr,p))}${g?`<small>invité</small>${edit?`<button type="button" class="x" data-act="guest-del" data-pid="${id}" data-id="${esc(p)}" aria-label="Retirer ${esc(partName(pr,p))}">×</button>`:''}`:''}</span>`}).join('');
+  let body='';
+  if(L.active){
+    const rowsP=L.parts.concat(Object.keys(L.bal).filter(i=>!L.parts.includes(i))).map(p=>{
+      const g=gSet.has(p),b=L.bal[p]||0,paidBy=L.credit[p]||0;
+      const sub=g?`a payé ${eur(Math.max(paidBy,0))}${paidBy<-0.005?` · a reçu ${eur(-paidBy)}`:''}`:(Math.abs(paidBy)>0.005?(paidBy>0?`a avancé ${eur(paidBy)}`:`a reçu ${eur(-paidBy)}`):'par la cagnotte');
+      const st=b<-0.005?`<span class="neg">doit ${eur(-b)}</span>`:b>0.005?`<span class="pos">à recevoir ${eur(b)}</span>`:g?`<span class="pos">à jour</span>`:'';
+      return row(`<b>${esc(partName(pr,p))}</b>${g?' <span class="chip">invité</span>':''}<div class="note">${sub}</div>`,`<span>${L.parts.includes(p)?eur(L.share[p]||0):'—'}</span>${st?`<small class="st">${st}</small>`:''}`);
+    }).join('');
+    const sug=settleSuggestions(x);
+    body+=`<h3 class="mini">Part de chacun <small class="muted">${eur(L.cost)} de dépenses</small></h3><div class="rows">${rowsP}</div>
+      <h3 class="mini">Pour être quittes</h3>
+      ${sug.length?`<div class="rows">${sug.map((s,i)=>row(settleText(pr,s),edit?`<button class="btn small" data-act="settle-done" data-pid="${id}" data-i="${i}">C’est fait</button>`:'')).join('')}</div>`:`<p class="note" style="margin-top:2px">Tout le monde est quitte.</p>`}
+      ${edit?`<button class="linkbtn" data-act="settle-new" data-pid="${id}" style="margin-top:6px">Noter un autre remboursement</button>`:''}
+      ${L.settles.length?`<h3 class="mini">Remboursements notés</h3><div class="rows">${L.settles.map(s=>row(`${settleText(pr,s)}<div class="note">${fmtDate(s.date)}${s.note?' · '+esc(s.note):''}</div>`,edit?`<button class="btn small ${S.delArm===s.id?'danger':'ghost'}" data-act="settle-del" data-pid="${id}" data-id="${esc(s.id)}">${S.delArm===s.id?'Confirmer':'Retirer'}</button>`:'')).join('')}</div>`:''}
+      <p class="note">Les dépenses pas encore payées comptent pour leur montant prévu. Les cotisants paient leur part avec la cagnotte.${x.mode==='goal'&&L.guests.length&&x.goal>L.cost+0.005?' Les invités paient leur part des dépenses notées : ajoute les dépenses prévues pour que leur part couvre tout le voyage.':''}</p>`;
+  }else body=`<p class="note">Un membre de la famille vient sans cotiser chaque mois ? Ajoute-le comme invité : l’appli calcule sa part du voyage. Quand quelqu’un avance une dépense de sa poche, note-le au paiement : l’appli dit qui rembourse qui.</p>`;
+  return `<section class="card">
+  <h2>Participants et comptes <small>${L.parts.length} participant${L.parts.length>1?'s':''}${L.guests.length?` dont ${L.guests.length} invité${L.guests.length>1?'s':''}`:''}</small></h2>
+  <div class="pchips">${chips}${edit?`<button type="button" class="pchip add" data-act="guest-new" data-pid="${id}">+ Ajouter un invité</button>`:''}</div>
+  ${body}
+</section>`;
+}
+
 function selProject(c){return (S.sel&&c.proj[S.sel])?S.sel:(c.current||c.order[0]||null)}
 function vTrips(c){
   if(!c.order.length)return stateCard('Aucun projet','Crée un premier voyage pour suivre son budget.',W()?`<div class="actions" style="margin-top:10px"><button class="btn block" data-act="proj-new">Créer un projet</button></div>`:'');
   const sid=selProject(c),x=c.proj[sid],pr=x.pr;
   const tabs=c.order.map(id=>{const y=c.proj[id];return `<button class="ptab" data-act="proj-sel" data-id="${esc(id)}" aria-pressed="${id===sid}"><b>${esc(y.pr.name)}</b><span>${y.passed?'Terminé':esc(projDate(y.pr))}</span></button>`}).join('')+(W()?`<button class="ptab add" data-act="proj-new">+ Projet</button>`:'');
-  const base=Math.max(x.paid+x.remaining+Math.max(x.available||0,0),1);
-  const wP=Math.min(x.paid/base*100,100),wR=Math.min(x.remaining/base*100,100-wP);
-  const vs=x.members;
+  const base=Math.max(x.paidAll+x.remaining+Math.max(x.available||0,0),1);
+  const wP=Math.min(x.paidAll/base*100,100),wR=Math.min(x.remaining/base*100,100-wP);
+  const vs=x.ledger.parts;
   const per=vs.length?x.planned/vs.length:0;
   const un=Math.abs(c.unalloc)>0.005?`<section class="card"><h2>Non affecté <small class="${c.unalloc<0?'neg':''}">${eur(c.unalloc)}</small></h2><p class="note" style="margin-top:0">Argent des voyages qui n’est rattaché à aucun projet (versements hors des mois d’un projet, virements…).</p>${W()&&c.unalloc>0?`<div class="actions" style="margin-top:10px"><button class="btn ghost block" data-act="alloc-new" data-from="none">Affecter à un projet</button></div>`:''}</section>`:'';
   return `
@@ -693,8 +854,8 @@ ${un}
 <section class="card">
   <h2>${esc(pr.name)} ${statusChip(x)}</h2>
   <p class="sub">${esc(projDate(pr))}${pr.note?' · '+esc(pr.note):''}${W()?` · <button class="linkbtn" data-act="proj-edit" data-id="${esc(sid)}">Modifier</button>`:''}</p>
-  ${x.passed||x.paid+x.remaining<=0?'':`<div class="stack" role="img" aria-label="Payé ${eur(x.paid)}, reste à payer ${eur(x.remaining)}"><i class="s-paid" style="width:${wP}%"></i><i class="s-rem" style="width:${wR}%"></i></div>
-  <div class="legend" style="margin:0 0 6px"><span><i class="k-spent"></i>Payé ${eur(x.paid)}</span><span><i class="k-rem"></i>Reste à payer ${eur(x.remaining)}</span><span><i class="k-future"></i>Libre</span></div>`}
+  ${x.passed||x.paidAll+x.remaining<=0?'':`<div class="stack" role="img" aria-label="Payé ${eur(x.paidAll)}, reste à payer ${eur(x.remaining)}"><i class="s-paid" style="width:${wP}%"></i><i class="s-rem" style="width:${wR}%"></i></div>
+  <div class="legend" style="margin:0 0 6px"><span><i class="k-spent"></i>Payé ${eur(x.paidAll)}</span><span><i class="k-rem"></i>Reste à payer ${eur(x.remaining)}</span><span><i class="k-future"></i>Libre</span></div>`}
   ${budgetBlock(c,x,true)}
   ${x.planned>0&&vs.length?`<p class="note">Dépenses prévues : ${eur(x.planned)}${x.rest.length?' hors '+restNames(x):''}, soit ${eur(per)} par participant.</p>`:''}
 </section>
@@ -703,7 +864,8 @@ ${goalCard(c,x)}
   <h2>Dépenses <small>${x.exps.length?x.exps.length+' ligne'+(x.exps.length>1?'s':''):''}</small></h2>
   ${x.exps.length?`<div>${x.exps.map(e=>expRow(e,x)).join('')}</div>`:`<p class="note">Aucune dépense pour ce voyage. Ajoute la première : logement, transport, activités…</p>`}
   ${W()&&!x.passed?`<div class="actions" style="margin-top:10px"><button class="btn block" data-act="exp-new" data-id="${esc(sid)}">Ajouter une dépense</button></div>`:''}
-</section>`;
+</section>
+${tricountCard(c,x)}`;
 }
 
 function personRow(p,ro){
@@ -744,6 +906,7 @@ function vSet(c){
   ${W()?`<button class="btn ghost block" data-act="recal">Recaler sur le solde de la banque</button>`:''}
   <p class="note">L’estimation part de ce solde. Elle ajoute les versements et virements reçus après, retire les dépenses payées après et chaque prélèvement du crédit.</p>
 </section>
+${planSettings()}
 <section class="card">
   <h2>Crédit</h2>
   <div class="fields2">
@@ -973,9 +1136,31 @@ function sheetExtra(){
 function sheetProject(pid){
   const isNew=!pid,p0=isNew?{}:S.projects[pid]||{};
   const f={name:p0.name||'',month:p0.month||'',startDate:p0.startDate||'',endDate:p0.endDate||'',note:p0.note||''};let confirmDel=false;
+  /* Suppression : le projet part avec ses dépenses. On montre avant ce qui change vraiment. */
+  const delInfo=()=>{
+    const exps=Object.values(S.expenses).filter(e=>expProject(e)===pid),pr=S.projects[pid]||{};
+    const pays=exps.reduce((n,e)=>n+(e.payments||[]).length,0),settles=(pr.settles||[]).length;
+    const links=Object.values(S.extras).filter(x=>x.project===pid).length+Object.values(S.moves).filter(x=>x.project===pid).length+Object.values(S.allocs).filter(a=>a.from===pid||a.to===pid).length;
+    const before=calc(),se=S.expenses,sp=S.projects,keep=new Set(Object.keys(se).filter(k=>expProject(se[k])!==pid));
+    let after;S.expenses=Object.fromEntries(Object.entries(se).filter(([k])=>keep.has(k)));S.projects=Object.fromEntries(Object.entries(sp).filter(([k])=>k!==pid));
+    try{after=calc()}finally{S.expenses=se;S.projects=sp}
+    return {exps,pays,settles,links,funded:!!pr.mode,estBefore:before.est,estAfter:after.est};
+  };
+  const delBlock=()=>{
+    if(!confirmDel)return `<div class="actions"><button class="btn ghost block" data-act="pj-del" style="color:var(--late)">Supprimer le projet</button></div>`;
+    const d=delInfo(),li=[];
+    if(d.exps.length)li.push(`${d.exps.length} dépense${d.exps.length>1?'s':''} (${esc(d.exps.map(e=>e.label).join(', '))}) ${d.exps.length>1?'seront supprimées':'sera supprimée'} avec.`);
+    if(d.pays)li.push(`${d.pays} paiement${d.pays>1?'s':''} noté${d.pays>1?'s':''} sur ces dépenses ${d.pays>1?'seront effacés':'sera effacé'}.`);
+    if(d.settles)li.push(`${d.settles} remboursement${d.settles>1?'s':''} noté${d.settles>1?'s':''} ${d.settles>1?'seront effacés':'sera effacé'}.`);
+    if(Math.abs(d.estAfter-d.estBefore)>0.005)li.push(`<b>Le solde estimé du livret passera de ${eur(d.estBefore)} à ${eur(d.estAfter)}.</b>`);
+    else li.push('Le solde du livret ne change pas.');
+    if(d.links)li.push(`${d.links} virement${d.links>1?'s':''} ou transfert${d.links>1?'s':''} lié${d.links>1?'s':''} à ce projet ${d.links>1?'restent':'reste'} dans la cagnotte, en « Non affecté ».`);
+    if(d.funded)li.push('Si tu as touché « Mettre à jour les cotisations » sur ce projet, vérifie ensuite les cotisations dans Réglages.');
+    return `<div class="warn" style="margin-top:14px"><b>Supprimer ${esc(f.name||'ce projet')} ?</b><ul class="dellist">${li.map(t=>`<li>${t}</li>`).join('')}</ul></div>
+      <div class="actions"><button class="btn danger" data-act="pj-del">Supprimer définitivement</button><button class="btn ghost" data-act="pj-del-no">Annuler</button></div>`;
+  };
   openSheet({
     render(){
-      const hasExp=!isNew&&Object.values(S.expenses).some(e=>expProject(e)===pid);
       return `<h3>${isNew?'Nouveau projet':'Modifier le projet'}</h3><p class="lead">Chaque voyage a son propre budget. Ce qui reste à la fin ne passe pas tout seul au suivant : tu le transfères à la main.</p>
       <div class="field"><label for="pj-n">Nom</label><input id="pj-n" value="${esc(f.name)}" placeholder="ex. Voyage 2028"></div>
       <div class="field"><label for="pj-m">Mois du voyage</label><input id="pj-m" type="month" value="${esc(f.month)}"></div>
@@ -986,7 +1171,7 @@ function sheetProject(pid){
       </div>
       <div class="field"><label for="pj-t">Note (facultatif)</label><input id="pj-t" value="${esc(f.note)}" placeholder="ex. destination"></div>
       <div class="actions"><button class="btn block" data-act="pj-save">${isNew?'Créer le projet':'Enregistrer'}</button></div>
-      ${isNew?'':hasExp?`<p class="note">Pour supprimer ce projet, supprime d’abord ses dépenses.</p>`:`<div class="actions"><button class="btn danger block" data-act="pj-del">${confirmDel?'Confirmer la suppression':'Supprimer le projet'}</button></div>`}`;
+      ${isNew?'':delBlock()}`;
     },
     bind(root){bindInputs(root,{'pj-n':'name','pj-m':'month','pj-s':'startDate','pj-e':'endDate','pj-t':'note'},f)},
     act:{
@@ -1001,18 +1186,21 @@ function sheetProject(pid){
         b.disabled=true;
         if(isNew){
           const id=slug(name);const order=Math.max(0,...Object.values(S.projects).map(x=>+x.order||0))+1;
-          const ok=await w(()=>S.db.doc('projects/'+id).set(Object.assign(data,{order})));
+          const ok=await w(async()=>{await freezeLegacy(null);await S.db.doc('projects/'+id).set(Object.assign(data,{order}))});
           if(ok){S.sel=id;toast('Projet créé');if(route()!=='voyages')location.hash='voyages';else render();sheetGoal(id)}else b.disabled=false;
         }else{
           const ok=await w(()=>S.db.doc('projects/'+pid).update(data),'Projet enregistré');
           if(ok)closeSheet();else b.disabled=false;
         }
       },
-      'pj-del':async()=>{
-        if(!confirmDel){confirmDel=true;drawSheet();return}
-        const ok=await w(()=>S.db.doc('projects/'+pid).delete());
-        if(ok){S.sel=null;closeSheet();toast('Projet supprimé')}
-      }
+      'pj-del':async b=>{
+        if(!confirmDel){confirmDel=true;drawSheet();setTimeout(()=>{const el=sheetBody.querySelector('.dellist');if(el)el.scrollIntoView({block:'center',behavior:'smooth'})},30);return}
+        const ids=Object.values(S.expenses).filter(e=>expProject(e)===pid).map(e=>e.id);
+        b.disabled=true;
+        const ok=await w(async()=>{for(const id of ids)await S.db.doc('expenses/'+id).delete();await S.db.doc('projects/'+pid).delete()});
+        if(ok){S.sel=null;closeSheet();toast('Projet supprimé')}else b.disabled=false;
+      },
+      'pj-del-no':()=>{confirmDel=false;drawSheet()}
     }});
 }
 
@@ -1069,25 +1257,31 @@ function sheetGoal(pid){
   const people=sortedPeople().filter(p=>p.active!==false||x.members.includes(p.id));
   const plannedTot=r2(x.exps.reduce((s,e)=>{const pd=sumPay(e);return s+(e.rest||e.closed||e.planned==null?pd:Math.max(+e.planned,pd))},0));
   const nExp=x.exps.filter(e=>!e.rest).length;
-  const f={mode:x.mode||pr.mode||'expenses',goal:pr.goal?fmtN(pr.goal):'',per:pr.perMonth?fmtN(pr.perMonth):'',
-    first:pr.firstMonth||x.win[0]||nextFreeMonth(),n:String(+pr.installments||x.win.length||''),
+  const f={mode:x.mode||pr.mode||'expenses',goal:pr.goal?fmtN(pr.goal):'',per:pr.perMonth?fmtN(pr.perMonth):'',total:fmtN(pr.total||usualMonthly(x.members.length?x.members:people.map(p=>p.id),pr.firstMonth||x.win[0]||nextFreeMonth())),
+    first:pr.firstMonth||x.win[0]||nextFreeMonth(),trip:pr.month||'',last:endRuleOf(pr),
     mem:new Set(x.members.length?x.members:people.map(p=>p.id)),ci:pr.creditIncluded!==false};
   let confirmDel=false;
-  const prev=()=>{const n=parseInt(f.n,10);return n>0&&n<=120&&/^\d{4}-\d{2}$/.test(f.first)&&f.mem.size?goalPreview(pid,1,f.first,n,f.mem):null};
+  const nOf=()=>payCount(f.first,f.trip,f.last);
+  const prev=()=>{const n=nOf();return !monthsMsg(f.first,f.trip,f.last)&&f.mem.size?goalPreview(pid,1,f.first,n,f.mem):null};
   const crBox=()=>f.mode==='monthly'?creditBox('gl-ci',prev(),f.ci):'';
   const res=()=>{
-    const n=parseInt(f.n,10),m=f.mem.size;
+    const n=nOf(),m=f.mem.size,mm=monthsMsg(f.first,f.trip,f.last);
     if(f.mode==='goal'&&!(num(f.goal)>0))return 'Indique le prix total du voyage.';
     if(f.mode==='monthly'&&!(num(f.per)>0))return 'Indique ce que chacun met par mois.';
+    if(f.mode==='rest'&&!(num(f.total)>0))return 'Indique ce que chacun met en tout par mois.';
     if(f.mode==='expenses'&&!(plannedTot>0))return 'Aucune dépense avec un montant pour l’instant. Enregistre, puis ajoute les dépenses dans la carte Dépenses : le prix et la mensualité se calculeront tout seuls.';
-    if(!(n>0&&n<=120))return 'Indique le nombre de mensualités.';
-    if(!/^\d{4}-\d{2}$/.test(f.first))return 'Choisis le mois du premier versement.';
+    if(mm)return mm;
     if(!m)return 'Choisis au moins un participant.';
     const g=f.mode==='goal'?num(f.goal):f.mode==='expenses'?plannedTot:1;
     const p=goalPreview(pid,g,f.first,n,f.mem),last=p.ms[p.ms.length-1];
     const info=`De ${mShort(f.first)} à ${mShort(last)} : ${n} mensualité${n>1?'s':''}, ${m} participant${m>1?'s':''}.`;
-    let h;
-    if(f.mode!=='monthly'){
+    let h,tail='';
+    if(f.mode==='rest'){
+      const x2=simCalc(pid,{mode:'rest',total:r2(num(f.total)),firstMonth:f.first,endRule:f.last,month:f.trip,members:sortedPeople().map(q=>q.id).filter(i=>f.mem.has(i))}).proj[pid];
+      h=`<b>Budget prévu : ${eur(x2.budget)}</b>${info}${x2.restZero.length?`<br><span class="neg">Certains mois, il ne reste rien pour ce voyage (${esc(namesOf(x2.restZero))}).</span>`:''}`;
+      tail=`<div class="restflow"><span>Ce qui va à ce voyage chaque mois</span>${flowHtml(x2)}</div>`;
+    }
+    else if(f.mode!=='monthly'){
       const pre=f.mode==='expenses'?`Prix estimé : ${eur(g)} (${nExp} dépense${nExp>1?'s':''}). `:'';
       if(p.need==null)h=(p.colx>=g?'<b>Objectif déjà atteint</b>':`<b>Il manque ${eur(g-p.colx)}</b>Toutes les mensualités de cette période sont déjà payées. `)+pre+info;
       else{const per=ceilE(p.need);h=`<b>${eur(per)} par personne et par mois</b>${pre}${info}${Math.abs(per-p.need)>0.004?` ${eur(p.need)} exactement.`:''}${p.colx>0.005?`<br>Déjà versé sur ces mois : ${eur(p.colx)}. Sans ça, ce serait ${eur(p.theo)} par personne.`:''}`}
@@ -1098,32 +1292,37 @@ function sheetGoal(pid){
       if(ci)h+=`<br>Le crédit (${eur(p.crCut)} jusqu’en ${mYear(p.crLast).toLowerCase()}) est déjà retiré. Sinon, ce serait ${eur(p.budget(per,false))}.`;
       if(plannedTot>0)h+=plannedTot>budget+0.005?`<br><span class="neg">Les dépenses prévues (${eur(plannedTot)}) dépassent ce budget de ${eur(plannedTot-budget)}.</span>`:`<br>Dépenses prévues : ${eur(plannedTot)}, il reste ${eur(budget-plannedTot)}.`;
     }
+    if(f.mode!=='rest')h+=lateStartNote(f.first,f.trip,f.last);
     const ov=overlapNames(c,pid,p.ms,f.mem);
     if(ov.length)h+=`<br><span>Ces mois recoupent ${ov.join(', ')} : les versements de ces mois-là seront partagés entre les projets.</span>`;
-    return h;
+    return h+tail;
   };
   openSheet({
     render(){return `<h3>Financement · ${esc(pr.name)}</h3>
       <p class="lead">Les versements des mois choisis iront à ce projet.</p>
       <span class="flabel">Comment préparer ce voyage ?</span>
-      ${seg('gl-mode',f.mode,[['expenses','Dépenses'],['monthly','Mensualité'],['goal','Prix total']])}
+      ${seg('gl-mode',f.mode,[['expenses','Dépenses'],['monthly','Mensualité'],['goal','Prix'],['rest','Le reste']])}
       ${f.mode==='goal'?`<div class="field"><label for="gl-g">Prix total du voyage (€)</label><input id="gl-g" inputmode="decimal" data-calc value="${esc(f.goal)}" placeholder="ex. 6000"></div>
       ${plannedTot>0?`<div class="pick sug"><button type="button" data-act="gl-use">Utiliser le total des dépenses prévues : ${eur(plannedTot)}</button></div>`:''}`
+      :f.mode==='rest'?`<div class="field"><label for="gl-tt">Chacun met en tout par mois (€)</label><input id="gl-tt" inputmode="decimal" value="${esc(f.total)}" placeholder="ex. 150"></div>
+      <p class="note" style="margin:-4px 0 12px">La cotisation ne bouge pas. Le crédit passe d’abord, puis les voyages qui ont un prix ou une mensualité (ex. le ski). Ce voyage prend ce qui reste.</p>`
       :f.mode==='monthly'?`<div class="field"><label for="gl-p">Chacun met par mois (€)</label><input id="gl-p" inputmode="decimal" value="${esc(f.per)}" placeholder="ex. 150"></div><div id="gl-cr">${crBox()}</div>`
       :`<p class="note" style="margin:-4px 0 12px">Le prix est la somme des dépenses prévues du projet. Il se met à jour quand tu ajoutes ou modifies une dépense.</p>`}
       <div class="fields2">
-        <div class="field"><label for="gl-f">Premier versement</label><input id="gl-f" type="month" value="${esc(f.first)}"></div>
-        <div class="field"><label for="gl-n">Nombre de mensualités</label><input id="gl-n" inputmode="numeric" value="${esc(f.n)}"></div>
+        <div class="field"><label for="gl-f">Début des cotisations</label><input id="gl-f" type="month" value="${esc(f.first)}"></div>
+        <div class="field"><label for="gl-t">Mois du voyage</label><input id="gl-t" type="month" value="${esc(f.trip)}"></div>
       </div>
+      <span class="flabel">Dernier versement</span>${seg('gl-last',f.last,[['trip','Le mois du voyage'],['before','Le mois d’avant']])}
       <span class="flabel">Qui participe ?</span>
       <div class="pick" style="margin:4px 0 14px">${people.map(p=>`<button type="button" data-act="gl-m" data-id="${esc(p.id)}" aria-pressed="${f.mem.has(p.id)}">${esc(p.name)}</button>`).join('')}</div>
       <div class="goalres" id="gl-res">${res()}</div>
       <div class="actions"><button class="btn block" data-act="gl-save">Enregistrer</button></div>
       ${x.mode?`<div class="actions"><button class="btn danger block" data-act="gl-del">${confirmDel?'Confirmer : retirer le financement':'Retirer le financement'}</button></div>`:''}`},
     bind(root){
-      const els=['gl-g','gl-p','gl-f','gl-n'].map(i=>root.querySelector('#'+i)).filter(Boolean),out=root.querySelector('#gl-res');
+      const els=['gl-g','gl-p','gl-tt','gl-f','gl-t'].map(i=>root.querySelector('#'+i)).filter(Boolean),out=root.querySelector('#gl-res');
       const upd=()=>{const v=i=>{const e=root.querySelector('#'+i);return e?e.value:null};
-        if(v('gl-g')!=null)f.goal=v('gl-g');if(v('gl-p')!=null)f.per=v('gl-p');f.first=v('gl-f');f.n=v('gl-n');out.innerHTML=res();
+        if(v('gl-tt')!=null)f.total=v('gl-tt');
+        if(v('gl-g')!=null)f.goal=v('gl-g');if(v('gl-p')!=null)f.per=v('gl-p');f.first=v('gl-f');f.trip=v('gl-t');out.innerHTML=res();
         const cb=root.querySelector('#gl-cr');if(cb)cb.innerHTML=crBox()};
       els.forEach(el=>{el.addEventListener('input',upd);el.addEventListener('change',upd)});
     },
@@ -1131,19 +1330,20 @@ function sheetGoal(pid){
       'gl-mode':b=>{f.mode=b.dataset.v;drawSheet()},
       'gl-use':()=>{f.goal=fmtN(plannedTot);drawSheet()},
       'gl-ci':()=>{f.ci=!f.ci;drawSheet()},
+      'gl-last':b=>{f.last=b.dataset.v;drawSheet()},
       'gl-m':b=>{const id=b.dataset.id;if(f.mem.has(id))f.mem.delete(id);else f.mem.add(id);drawSheet()},
       'gl-save':async b=>{
-        const n=parseInt(f.n,10);
+        const n=nOf();
         let data;
         if(f.mode==='goal'){const g=num(f.goal);if(!(g>0)){toast('Indique le prix du voyage');return}data={mode:'goal',goal:r2(g)}}
         else if(f.mode==='monthly'){const per=num(f.per);if(!(per>0)){toast('Indique la mensualité par personne');return}data={mode:'monthly',perMonth:r2(per),creditIncluded:f.ci}}
+        else if(f.mode==='rest'){const t=num(f.total);if(!(t>0)){toast('Indique ce que chacun met en tout');return}data={mode:'rest',total:r2(t)}}
         else data={mode:'expenses'};
-        if(!(n>0&&n<=120)){toast('Indique le nombre de mensualités');return}
-        if(!/^\d{4}-\d{2}$/.test(f.first)){toast('Choisis le premier versement');return}
+        const mm=monthsMsg(f.first,f.trip,f.last);if(mm){toast(mm.replace(/\.$/,''));return}
         if(!f.mem.size){toast('Choisis au moins un participant');return}
-        Object.assign(data,{firstMonth:f.first,installments:n,members:sortedPeople().map(p=>p.id).filter(id=>f.mem.has(id))});
+        Object.assign(data,{firstMonth:f.first,endRule:f.last,installments:n,month:f.trip,members:sortedPeople().map(p=>p.id).filter(id=>f.mem.has(id))});
         b.disabled=true;
-        const ok=await w(()=>S.db.doc('projects/'+pid).update(data),'Financement enregistré');
+        const ok=await w(async()=>{await freezeLegacy(pid);await S.db.doc('projects/'+pid).update(data)},'Financement enregistré');
         if(ok){S.sel=pid;closeSheet()}else b.disabled=false;
       },
       'gl-del':async()=>{
@@ -1158,8 +1358,10 @@ function sheetGoal(pid){
 function sheetWizard(){
   const cm=todayStr().slice(0,7);
   const people=sortedPeople().filter(p=>p.active!==false);
-  const f={step:1,name:'',month:'',kind:null,choice:null,per:'',goal:'',lines:[],linesKind:null,first:nextFreeMonth(),n:'',mem:new Set(people.map(p=>p.id)),ci:true};
-  const prev=()=>{const n=parseInt(f.n,10);return n>0&&n<=120&&/^\d{4}-\d{2}$/.test(f.first)&&f.mem.size?goalPreview(null,1,f.first,n,f.mem):null};
+  const f={step:1,name:'',month:'',kind:null,choice:null,per:'',goal:'',total:'',lines:[],linesKind:null,first:nextFreeMonth(),last:'trip',mem:new Set(people.map(p=>p.id)),ci:true};
+  f.total=fmtN(usualMonthly(people.map(p=>p.id),f.first));
+  const nOf=()=>payCount(f.first,f.month,f.last);
+  const prev=()=>{const n=nOf();return !monthsMsg(f.first,f.month,f.last)&&f.mem.size?goalPreview(null,1,f.first,n,f.mem):null};
   const crBox=()=>f.choice==='monthly'?creditBox('wz-ci',prev(),f.ci):'';
   const kindOf=k=>TRIP_KINDS.find(z=>z[0]===k)||TRIP_KINDS[TRIP_KINDS.length-1];
   const total=()=>r2(f.lines.reduce((s,l)=>s+(numExpr(l.amount)||0),0));
@@ -1167,22 +1369,26 @@ function sheetWizard(){
   const head=(n,t)=>`<p class="steps">Nouveau projet · étape ${n} sur 4</p><h3>${t}</h3>`;
   const back='<button class="btn ghost" data-act="wz-back">Retour</button>';
   const res4=()=>{
-    const n=parseInt(f.n,10),m=f.mem.size;
-    if(!(n>0&&n<=120))return 'Indique le nombre de mensualités.';
-    if(!/^\d{4}-\d{2}$/.test(f.first))return 'Choisis le mois du premier versement.';
+    const n=nOf(),m=f.mem.size,mm=monthsMsg(f.first,f.month,f.last);
+    if(mm)return mm;
     if(!m)return 'Choisis au moins un participant.';
     const last=addMonth(f.first,n-1);
     const info=`De ${mShort(f.first)} à ${mShort(last)} : ${n} mensualité${n>1?'s':''}, ${m} participant${m>1?'s':''}.`;
-    let h;
-    if(f.choice==='monthly'){
+    let h,tail='';
+    if(f.choice==='rest'){
+      const x2=simCalc('__draft__',{name:f.name||'Ce voyage',month:f.month,firstMonth:f.first,endRule:f.last,members:sortedPeople().map(q=>q.id).filter(i=>f.mem.has(i)),mode:'rest',total:r2(num(f.total))}).proj['__draft__'];
+      h=`<b>Budget prévu : ${eur(x2.budget)}</b>Avec ce qui reste des ${eur(num(f.total))} de chacun. ${info}${x2.restZero.length?`<br><span class="neg">Certains mois, il ne reste rien pour ce voyage (${esc(namesOf(x2.restZero))}).</span>`:''}`;
+      tail=`<div class="restflow"><span>Ce qui va à ce voyage chaque mois</span>${flowHtml(x2)}</div>`;
+    }
+    else if(f.choice==='monthly'){
       const p=prev(),per=num(f.per),ci=f.ci&&p.crCut>0;
       h=`<b>Budget : ${eur(p.budget(per,ci))}</b>Avec ${eur(per)} par personne et par mois${ci?`, dont ${eur(p.crCut)} pour le crédit jusqu’en ${mYear(p.crLast).toLowerCase()}`:''}. ${info}`;
     }
     else{const g=price(),need=g/(n*m),per=ceilE(need);h=`<b>${eur(per)} par personne et par mois</b>Pour un prix de ${eur(g)}. ${info}${Math.abs(per-need)>0.004?` ${eur(need)} exactement.`:''}`}
-    if(f.month&&last>f.month)h+=`<br><span class="neg">La dernière mensualité tombe après le mois du voyage.</span>`;
+    if(f.choice!=='rest')h+=lateStartNote(f.first,f.month,f.last);
     const ov=overlapNames(calc(),null,monthsBetween(f.first,last),f.mem);
     if(ov.length)h+=`<br><span>Ces mois recoupent ${ov.join(', ')} : les versements seront partagés entre les projets, et « Mettre à jour les cotisations » additionnera les mensualités.</span>`;
-    return h;
+    return h+tail;
   };
   openSheet({
     render(){
@@ -1196,6 +1402,7 @@ function sheetWizard(){
         <div class="choices">
           <button type="button" class="choice rec" data-act="wz-choice" data-v="expenses"><b>Estimer le prix avec les dépenses</b><span>Vous listez ce que vous allez payer : logement, essence, péages, courses… L’appli calcule le prix du voyage, puis la mensualité.</span></button>
           <button type="button" class="choice" data-act="wz-choice" data-v="monthly"><b>Je connais la mensualité</b><span>Vous savez combien chacun met par mois. L’appli calcule le budget.</span></button>
+          <button type="button" class="choice" data-act="wz-choice" data-v="rest"><b>Avec le reste de la cotisation</b><span>Chacun garde sa cotisation (ex. 150 € en tout). Ce voyage reçoit ce qui reste après le crédit et les autres voyages. L’appli calcule le budget.</span></button>
         </div>
         <p class="note">Vous avez déjà un prix total ? <button class="linkbtn" data-act="wz-choice" data-v="goal">Entrer le prix</button></p>
         <div class="actions">${back}</div>`;
@@ -1210,6 +1417,10 @@ function sheetWizard(){
           <div class="goalres"><b id="wz-tot">${eur(total())}</b>prix estimé du voyage</div>
           <div class="actions">${back}<button class="btn" data-act="wz-next">Suivant</button></div>`;
       }
+      if(f.step===3&&f.choice==='rest')return `${head(3,'La cotisation')}
+          <div class="field"><label for="wz-tt">Chacun met en tout par mois (€)</label><input id="wz-tt" inputmode="decimal" value="${esc(f.total)}" placeholder="ex. 150"></div>
+          <p class="note" style="margin:-4px 0 12px">La cotisation ne bouge pas. Le crédit passe d’abord, puis les voyages qui ont un prix ou une mensualité (ex. le ski). Ce voyage prend ce qui reste.</p>
+          <div class="actions">${back}<button class="btn" data-act="wz-next">Suivant</button></div>`;
       if(f.step===3&&f.choice==='monthly')return `${head(3,'La mensualité')}
           <div class="field"><label for="wz-p">Chacun met par mois (€)</label><input id="wz-p" inputmode="decimal" value="${esc(f.per)}" placeholder="ex. 150"></div>
           ${+S.settings.creditMonthly>0&&S.settings.creditEndMonth&&S.settings.creditEndMonth>=f.first?`<p class="note" style="margin:-4px 0 12px">Mets ce que chacun verse en tout. Tant que le crédit court, sa part est retirée du budget du voyage.</p>`:''}
@@ -1219,9 +1430,10 @@ function sheetWizard(){
           <div class="actions">${back}<button class="btn" data-act="wz-next">Suivant</button></div>`;
       return `${head(4,'Les mensualités')}
         <div class="fields2">
-          <div class="field"><label for="wz-f">Premier versement</label><input id="wz-f" type="month" value="${esc(f.first)}"></div>
-          <div class="field"><label for="wz-c">Nombre de mensualités</label><input id="wz-c" inputmode="numeric" value="${esc(f.n)}"></div>
+          <div class="field"><label for="wz-f">Début des cotisations</label><input id="wz-f" type="month" value="${esc(f.first)}"></div>
+          <div class="field"><label for="wz-t">Mois du voyage</label><input id="wz-t" type="month" value="${esc(f.month)}"></div>
         </div>
+        <span class="flabel">Dernier versement</span>${seg('wz-last',f.last,[['trip','Le mois du voyage'],['before','Le mois d’avant']])}
         <span class="flabel">Qui participe ?</span>
         <div class="pick" style="margin:4px 0 14px">${people.map(p=>`<button type="button" data-act="wz-m" data-id="${esc(p.id)}" aria-pressed="${f.mem.has(p.id)}">${esc(p.name)}</button>`).join('')}</div>
         <div id="wz-cr">${crBox()}</div>
@@ -1232,14 +1444,15 @@ function sheetWizard(){
     bind(root){
       const on=(id,fn)=>{const el=root.querySelector('#'+id);if(el){el.addEventListener('input',fn);el.addEventListener('change',fn)}};
       on('wz-n',e=>{f.name=e.target.value});on('wz-m',e=>{f.month=e.target.value});
-      on('wz-p',e=>{f.per=e.target.value});on('wz-g',e=>{f.goal=e.target.value});
+      on('wz-p',e=>{f.per=e.target.value});on('wz-g',e=>{f.goal=e.target.value});on('wz-tt',e=>{f.total=e.target.value});
       root.querySelectorAll('#wz-lines input').forEach(el=>el.addEventListener('input',()=>{f.lines[+el.dataset.i][el.dataset.k]=el.value;const t=root.querySelector('#wz-tot');if(t)t.textContent=eur(total())}));
       const upd=()=>{const o=root.querySelector('#wz-res');if(o)o.innerHTML=res4();const cb=root.querySelector('#wz-cr');if(cb)cb.innerHTML=crBox()};
-      on('wz-f',e=>{f.first=e.target.value;upd()});on('wz-c',e=>{f.n=e.target.value;upd()});
+      on('wz-f',e=>{f.first=e.target.value;upd()});on('wz-t',e=>{f.month=e.target.value;upd()});
     },
     act:{
       'wz-kind':b=>{f.kind=f.kind===b.dataset.v?null:b.dataset.v;drawSheet()},
       'wz-ci':()=>{f.ci=!f.ci;drawSheet()},
+      'wz-last':b=>{f.last=b.dataset.v;drawSheet()},
       'wz-back':()=>{f.step=Math.max(1,f.step-1);drawSheet()},
       'wz-choice':b=>{
         f.choice=b.dataset.v;
@@ -1259,25 +1472,26 @@ function sheetWizard(){
         if(f.step===3){
           if(f.choice==='expenses'&&!(total()>0)){toast('Indique au moins un montant');return}
           if(f.choice==='monthly'&&!(num(f.per)>0)){toast('Indique la mensualité par personne');return}
+          if(f.choice==='rest'&&!(num(f.total)>0)){toast('Indique ce que chacun met en tout');return}
           if(f.choice==='goal'&&!(num(f.goal)>0)){toast('Indique le prix du voyage');return}
-          if(!f.n&&f.month&&f.month>=f.first)f.n=String(monthsBetween(f.first,f.month).length);
           f.step=4;drawSheet();
         }
       },
       'wz-save':async b=>{
-        const n=parseInt(f.n,10);
-        if(!(n>0&&n<=120)){toast('Indique le nombre de mensualités');return}
-        if(!/^\d{4}-\d{2}$/.test(f.first)){toast('Choisis le premier versement');return}
+        const n=nOf(),mm=monthsMsg(f.first,f.month,f.last);
+        if(mm){toast(mm.replace(/\.$/,''));return}
         if(!f.mem.size){toast('Choisis au moins un participant');return}
         const name=f.name.trim(),id=slug(name),order=Math.max(0,...Object.values(S.projects).map(x=>+x.order||0))+1;
-        const data={name,month:f.month||null,startDate:null,endDate:null,note:'',order,firstMonth:f.first,installments:n,members:sortedPeople().map(p=>p.id).filter(i=>f.mem.has(i))};
+        const data={name,month:f.month||null,startDate:null,endDate:null,note:'',order,firstMonth:f.first,endRule:f.last,installments:n,members:sortedPeople().map(p=>p.id).filter(i=>f.mem.has(i))};
         if(f.choice==='monthly')Object.assign(data,{mode:'monthly',perMonth:r2(num(f.per)),creditIncluded:f.ci});
+        else if(f.choice==='rest')Object.assign(data,{mode:'rest',total:r2(num(f.total))});
         else if(f.choice==='goal')Object.assign(data,{mode:'goal',goal:r2(num(f.goal))});
         else data.mode='expenses';
         const lines=f.choice==='expenses'?f.lines.filter(l=>numExpr(l.amount)>0):[];
         let eo=Math.max(0,...Object.values(S.expenses).map(x=>+x.order||0));
         b.disabled=true;
         const ok=await w(async()=>{
+          await freezeLegacy(null);
           await S.db.doc('projects/'+id).set(data);
           for(const l of lines){eo++;await S.db.doc('expenses/'+newId('e')).set({project:id,label:l.label.trim()||'Autre dépense',planned:r2(numExpr(l.amount)),rest:false,closed:false,note:hasOp(l.amount)?prettyExpr(l.amount):'',order:eo,payments:[]})}
         });
@@ -1290,13 +1504,14 @@ function sheetWizard(){
 function sheetApplyAll(){
   const c=calc(),ce=S.settings.creditEndMonth||null;
   const live=c.order.map(id=>c.proj[id]).filter(x=>!x.passed&&x.win.length);
-  const withF=live.filter(x=>x.target!=null),noF=live.filter(x=>!x.mode);
-  if(!withF.length){toast('Aucun projet avec un financement');return}
-  const lastM=withF.map(x=>x.win[x.win.length-1]).sort().pop();
-  let F0=[c.cm,withF.map(x=>x.win[0]).sort()[0]].sort().pop();
+  const withF=live.filter(x=>x.target!=null),restP=live.filter(x=>x.mode==='rest'),noF=live.filter(x=>!x.mode);
+  const allF=withF.concat(restP);
+  if(!allF.length){toast('Aucun projet avec un financement');return}
+  const lastM=allF.map(x=>x.win[x.win.length-1]).sort().pop();
+  let F0=[c.cm,allF.map(x=>x.win[0]).sort()[0]].sort().pop();
   const nfEnd=noF.map(x=>x.win[x.win.length-1]).filter(e=>e>=F0&&e<lastM).sort().pop();
   if(nfEnd)F0=addMonth(nfEnd);
-  const people=sortedPeople().filter(p=>withF.some(x=>x.members.includes(p.id)));
+  const people=sortedPeople().filter(p=>allF.some(x=>x.members.includes(p.id)));
   const f={from:F0};
   const schedule=p=>{
     const crBase=(ce&&f.from>ce)?0:rateFor(p,f.from).credit,segs=[];
@@ -1305,10 +1520,17 @@ function sheetApplyAll(){
       /* mensualité « crédit compris » : la part crédit est prise dedans, pas ajoutée en plus */
       for(const id of c.crOrder){const x=c.proj[id];if(!withF.includes(x)||!x.win.includes(m)||!x.members.includes(p.id))continue;const d=Math.min(cr,x.target);cut[id]=d;cr-=d}
       const parts=withF.filter(x=>x.win.includes(m)&&x.members.includes(p.id)).map(x=>[x.pr.name,r2(x.target-(cut[x.pr.id]||0))]);
-      const ski=r2(parts.reduce((s,z)=>s+z[1],0));
-      const key=ski+'|'+credit+'|'+parts.map(z=>z[0]+z[1]).join(',');
+      let ski=r2(parts.reduce((s,z)=>s+z[1],0)),over=0;
+      /* projets « le reste » : la cotisation reste au total choisi, ils prennent ce qui reste après le crédit et les autres */
+      const rIn=restP.filter(x=>x.win.includes(m)&&x.members.includes(p.id));
+      if(rIn.length){
+        const tot=Math.max(...rIn.map(x=>x.total||0)),left=r2(tot-credit-ski);
+        if(left<-0.005){over=r2(-left);ski=r2(Math.max(tot-credit,0))}
+        else{const each=r2(left/rIn.length);rIn.forEach(x=>parts.push([x.pr.name,each]));ski=r2(ski+left)}
+      }
+      const key=ski+'|'+credit+'|'+over+'|'+parts.map(z=>z[0]+z[1]).join(',');
       const lst=segs[segs.length-1];
-      if(lst&&lst.key===key)lst.to=m;else segs.push({key,from:m,to:m,ski,credit,parts});
+      if(lst&&lst.key===key)lst.to=m;else segs.push({key,from:m,to:m,ski,credit,parts,over});
     }
     return segs;
   };
@@ -1320,9 +1542,16 @@ function sheetApplyAll(){
     let h='';
     for(const {s,names} of groups.values()){
       h+=`<div class="who">${esc(names.join(', '))}</div>`;
-      h+=s.map(z=>`<div class="ln"><span>${mShort(z.from)}${z.to!==z.from?' → '+mShort(z.to):''}</span><b>${eur(z.ski+z.credit)}</b></div><div class="det">${z.parts.map(q=>eur(q[1])+' '+esc(q[0])).concat(z.credit>0?[eur(z.credit)+' crédit']:[]).join(' + ')||'aucun projet ce mois-là'}</div>`).join('');
+      h+=s.map(z=>`<div class="ln"><span>${mShort(z.from)}${z.to!==z.from?' → '+mShort(z.to):''}</span><b>${eur(z.ski+z.credit)}</b></div><div class="det">${z.parts.map(q=>eur(q[1])+' '+esc(q[0])).concat(z.credit>0?[eur(z.credit)+' crédit']:[]).join(' + ')||'aucun projet ce mois-là'}${z.over>0?` <span class="neg">· il manque ${eur(z.over)}</span>`:''}</div>`).join('');
     }
     const warn=[];
+    const overP=people.filter(p=>schedule(p).some(z=>z.over>0));
+    if(overP.length)warn.push(`<span class="neg">Certains mois, les voyages à prix fixé demandent plus que la cotisation (${esc(overP.map(p=>p.name).join(', '))}) : la cotisation reste au même montant, mais ces voyages recevront moins que prévu.</span>`);
+    /* quelqu'un qui ne cotiserait plus (ou seulement le crédit) quelques mois : aucun de ses voyages ne couvre ces mois */
+    for(const p of people){
+      const holes=[];for(const z of schedule(p)){if(z.parts.length)continue;const l=holes[holes.length-1];if(l&&addMonth(l.to)===z.from)l.to=z.to;else holes.push({from:z.from,to:z.to})}
+      if(holes.length)warn.push(`<span class="neg">${esc(p.name)} : rien pour les voyages ${holes.map(z=>z.from===z.to?'en '+mShort(z.from):`de ${mShort(z.from)} à ${mShort(z.to)}`).join(', ')}.</span> Aucun de ses voyages ne couvre ces mois : avance le début des cotisations d’un de ses voyages.`);
+    }
     const inNoF=noF.filter(x=>x.win.some(m=>m>=f.from&&m<=lastM)).map(x=>esc(x.pr.name));
     if(inNoF.length)warn.push(`<span class="neg">${inNoF.join(', ')} n’a pas encore de financement : ses mois ne sont pas comptés.</span>`);
     if(people.some(p=>sortRates(p).some(r=>r.from>=f.from)))warn.push('Les changements déjà prévus à partir de ce mois sont remplacés.');
@@ -1330,7 +1559,7 @@ function sheetApplyAll(){
     return `<div class="sched">${h}</div><p class="note">${warn.join('<br>')}</p>`;
   };
   openSheet({
-    render(){return `<h3>Mettre à jour les cotisations</h3><p class="lead">Chacun paie la somme des mensualités des voyages auxquels il participe, plus la part crédit jusqu’à la fin du crédit (sauf si elle est déjà comprise dans la mensualité).</p>
+    render(){return `<h3>Mettre à jour les cotisations</h3><p class="lead">${restP.length?`Pour les voyages « le reste », la cotisation reste à ${eur(Math.max(...restP.map(x=>x.total||0)))} en tout : le crédit, puis les voyages à prix fixé, puis le reste.`:'Chacun paie la somme des mensualités des voyages auxquels il participe, plus la part crédit jusqu’à la fin du crédit (sauf si elle est déjà comprise dans la mensualité).'}</p>
       <div class="field"><label for="aa-f">À partir de</label><input id="aa-f" type="month" value="${esc(f.from)}"></div>
       <div id="aa-res">${preview()}</div>
       <div class="actions"><button class="btn block" data-act="aa-save">Appliquer à ${people.length} personne${people.length>1?'s':''}</button></div>`},
@@ -1404,21 +1633,255 @@ function sheetCreditTransfer(){
     }}});
 }
 
+/* Calcul avec un projet en brouillon (aperçu avant d'enregistrer). */
+function simCalc(id,draft){const sp=S.projects;S.projects=Object.assign({},sp,{[id]:Object.assign({order:999},sp[id]||{},draft,{id})});try{return calc()}finally{S.projects=sp}}
+/* Cotisation la plus courante (ex. 150 €) parmi des cotisants, pour un mois. */
+function usualMonthly(ids,m){const cnt={};ids.forEach(id=>{const p=S.people[id];if(p){const v=rateFor(p,m).monthly;if(v>0)cnt[v]=(cnt[v]||0)+1}});const k=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];return k?+k:150}
+/* Ce qui va chaque mois à un projet « le reste », regroupé par personnes qui ont le même calendrier. */
+function flowHtml(x){
+  const groups=new Map();
+  for(const [pid,arr] of Object.entries(x.flow||{})){
+    const segs=[];for(const [m,v] of arr){const l=segs[segs.length-1];if(l&&Math.abs(l.v-v)<0.005&&addMonth(l.to)===m)l.to=m;else segs.push({from:m,to:m,v})}
+    const k=JSON.stringify(segs);if(!groups.has(k))groups.set(k,{segs,names:[]});groups.get(k).names.push(S.people[pid]?S.people[pid].name:pid);
+  }
+  let h='';for(const {segs,names} of groups.values())h+=`<div class="who">${esc(names.join(', '))}</div>`+segs.map(z=>`<div class="ln"><span>${mShort(z.from)}${z.to!==z.from?' → '+mShort(z.to):''}</span><b>${eur(z.v)}</b></div>`).join('');
+  return h?`<div class="sched">${h}</div>`:'';
+}
+const namesOf=ids=>ids.map(i=>S.people[i]?S.people[i].name:'').filter(Boolean).join(', ');
+/* ---------- plan 150 € : l'appli règle tout d'un coup ----------
+   Jusqu'en déc. 2026 : la cotisation va au Ski 2026 (et au crédit), comme aujourd'hui.
+   Dès janv. 2027 : 150 € par personne. Le crédit d'abord (jusqu'à sa fin), puis ce qu'il faut pour le Ski 2027,
+   et le reste pour le Voyage 2028. Les projets de test sans argent noté sont supprimés. */
+const PLAN_TOTAL=150,PLAN_FROM='2027-01';
+const plannedTotal=pid=>r2(Object.values(S.expenses).filter(e=>expProject(e)===pid).reduce((s,e)=>s+expCost(e),0));
+function projHasMoney(pid){
+  const pr=S.projects[pid]||{};
+  return Object.values(S.expenses).some(e=>expProject(e)===pid&&(e.payments||[]).length)||(pr.settles||[]).length>0
+    ||Object.values(S.extras).some(x=>x.project===pid)||Object.values(S.moves).some(x=>x.project===pid)||Object.values(S.allocs).some(a=>a.from===pid||a.to===pid);
+}
+function planBuild(){
+  const st=S.settings,prs=sortedProjects(),c0=calc();
+  const isSki=p=>/ski/i.test(p.name||''),mo=p=>String(p.month||'');
+  const priceOf=p=>p.mode==='goal'&&+p.goal>0?+p.goal:p.mode==='expenses'?plannedTotal(p.id):0;
+  const ski26=prs.find(p=>isSki(p)&&mo(p)&&mo(p)<PLAN_FROM)||null;
+  const v28=prs.find(p=>p.id==='voyage2028')||prs.find(p=>!isSki(p)&&mo(p).slice(0,4)==='2028')||null;
+  const cands=prs.filter(p=>p!==ski26&&p!==v28&&isSki(p)&&mo(p)>=PLAN_FROM&&mo(p)<'2028-01')
+    .sort((a,b)=>(priceOf(b)>0?1:0)-(priceOf(a)>0?1:0)||mo(a).localeCompare(mo(b))||byOrder(a,b));
+  const ski27=cands[0]||null;
+  const others=prs.filter(p=>p!==ski26&&p!==v28&&p!==ski27);
+  const del=others.filter(p=>!projHasMoney(p.id)),keep=others.filter(p=>projHasMoney(p.id));
+  const active=sortedPeople().filter(p=>p.active!==false);
+  const skiMem=ski27&&Array.isArray(ski27.members)&&ski27.members.length?ski27.members.filter(i=>S.people[i])
+    :(ski26&&c0.proj[ski26.id]&&c0.proj[ski26.id].members.length?c0.proj[ski26.id].members:active.map(p=>p.id));
+  const hasPrice=!!(ski27&&priceOf(ski27)>0);
+  const newLines=hasPrice||!ski26?[]:sortedExpenses().filter(e=>expProject(e)===ski26.id)
+    .map(e=>e.rest?{label:e.label,rest:true}:{label:e.label,planned:r2(expCost(e)),note:e.note||''}).filter(l=>l.rest||l.planned>0);
+  const nextOrder=Math.max(0,...prs.map(p=>+p.order||0))+1;
+  const ski26Data=ski26&&!ski26.firstMonth?{firstMonth:(c0.proj[ski26.id]&&c0.proj[ski26.id].win[0])||st.startMonth,endRule:'trip'}:null;
+  const skiMonth=ski27?mo(ski27):(ski26?addMonth(mo(ski26),12):'2027-12');
+  const ski27Data=Object.assign(ski27?{}:{name:'Ski 2027',month:skiMonth,startDate:null,endDate:null,note:'',order:nextOrder},
+    {firstMonth:PLAN_FROM,endRule:'trip',members:skiMem,mode:hasPrice?ski27.mode:'expenses'});
+  const v28Data=Object.assign(v28?{}:{name:'Voyage 2028',startDate:null,endDate:null,note:'',order:nextOrder+1},
+    {month:v28&&mo(v28)?mo(v28):'2028-04',mode:'rest',total:PLAN_TOTAL,firstMonth:PLAN_FROM,endRule:'trip',members:active.map(p=>p.id)});
+  const ce=st.creditEndMonth;
+  const ratesFor=p=>{
+    const out=sortRates(p).filter(r=>r.from<PLAN_FROM).map(r=>Object.assign({},r));
+    const cr=Math.min(rateFor(p,addMonth(PLAN_FROM,-1)).credit||50,PLAN_TOTAL);
+    if(ce&&ce>=PLAN_FROM){out.push({from:PLAN_FROM,monthly:PLAN_TOTAL,ski:PLAN_TOTAL-cr,credit:cr});out.push({from:addMonth(ce),monthly:PLAN_TOTAL,ski:PLAN_TOTAL,credit:0})}
+    else out.push({from:PLAN_FROM,monthly:PLAN_TOTAL,ski:PLAN_TOTAL,credit:0});
+    return out;
+  };
+  return {ski26,ski27,v28,del,keep,active,skiMem,hasPrice,newLines,ski26Data,ski27Data,v28Data,ratesFor,skiPriceNow:ski27?priceOf(ski27):0};
+}
+/* Aperçu : on calcule comme si le plan était appliqué, sans rien enregistrer. */
+function planSim(pl){
+  const P=JSON.parse(JSON.stringify(S.projects)),E=JSON.parse(JSON.stringify(S.expenses)),PE=JSON.parse(JSON.stringify(S.people));
+  const delIds=new Set(pl.del.map(p=>p.id));
+  Object.keys(E).forEach(k=>{if(delIds.has(expProject(E[k])))delete E[k]});
+  delIds.forEach(id=>delete P[id]);
+  if(pl.ski26&&pl.ski26Data)Object.assign(P[pl.ski26.id],pl.ski26Data);
+  const sid=pl.ski27?pl.ski27.id:'__ski27',vid=pl.v28?pl.v28.id:'__v28';
+  P[sid]=Object.assign({id:sid},P[sid]||{},pl.ski27Data);
+  P[vid]=Object.assign({id:vid},P[vid]||{},pl.v28Data);
+  pl.newLines.forEach((l,i)=>{E['__l'+i]={id:'__l'+i,project:sid,label:l.label,planned:l.rest?null:l.planned,rest:!!l.rest,closed:false,note:l.note||'',order:900+i,payments:[]}});
+  pl.active.forEach(p=>{PE[p.id].rates=pl.ratesFor(p)});
+  const save=[S.projects,S.expenses,S.people];S.projects=P;S.expenses=E;S.people=PE;
+  try{const c=calc();return {c,ski:c.proj[sid],voy:c.proj[vid],ski26:pl.ski26?c.proj[pl.ski26.id]:null}}finally{S.projects=save[0];S.expenses=save[1];S.people=save[2]}
+}
+function planHtml(withBtn){
+  const pl=planBuild(),sm=planSim(pl),st=S.settings,ce=st.creditEndMonth;
+  const sk=sm.ski,vy=sm.voy,phi=pl.active.filter(p=>rateFor(p,addMonth(PLAN_FROM,-1)).monthly<PLAN_TOTAL-0.005&&inPeriod(p,addMonth(PLAN_FROM,-1),st.startMonth));
+  const skiName=pl.ski27?pl.ski27.name:'Ski 2027',v28Name=pl.v28?pl.v28.name:'Voyage 2028';
+  const price=sk&&sk.goal?sk.goal:0;
+  const src=pl.hasPrice?(pl.ski27.mode==='goal'?'prix fixé':'d’après ses dépenses prévues'):pl.newLines.length?`dépenses reprises du ${esc(pl.ski26.name)} : ${esc(pl.newLines.filter(l=>!l.rest).map(l=>l.label.toLowerCase()).join(', '))}`:'';
+  const li=[];
+  li.push(`<b>Jusqu’en ${mShort(addMonth(PLAN_FROM,-1))}</b> : rien ne change, la cotisation va au ${esc(pl.ski26?pl.ski26.name:'voyage en cours')} et au crédit.${phi.length?` ${esc(phi.map(p=>p.name).join(', '))} ${phi.length>1?'restent':'reste'} à ${eur(rateFor(phi[0],addMonth(PLAN_FROM,-1)).monthly)} jusque-là.`:''}`);
+  li.push(`<b>${PLAN_TOTAL} € par mois pour tout le monde</b> dès ${mShort(PLAN_FROM)}${phi.length?`, ${esc(phi.map(p=>p.name).join(', '))} compris`:''}. C’est ce qui s’affichera dans le tableau des versements.`);
+  if(ce&&ce>=PLAN_FROM)li.push(`<b>Crédit</b> : ${eur(pl.active.length?(rateFor(pl.active[0],addMonth(PLAN_FROM,-1)).credit||50):50)} par personne et par mois jusqu’en ${mYear(ce).toLowerCase()}.`);
+  li.push(sk&&price>0?`<b>${esc(skiName)}</b> (${mYear(sk.pr.month).toLowerCase()}) : prix estimé ${eur(price)}${src?` (${src})`:''}, soit <b>${eur(sk.target||0)} par personne et par mois</b> de ${mShort(sk.win[0])} à ${mShort(sk.win[sk.win.length-1])}, pour ${esc(namesOf(sk.members))}.`
+    :`<b>${esc(skiName)}</b> : pas encore de prix. Ajoute ses dépenses ensuite, sa part se calculera toute seule.`);
+  li.push(vy?`<b>${esc(v28Name)}</b> : le reste des ${PLAN_TOTAL} €, de ${mShort(vy.win[0])} à ${mShort(vy.win[vy.win.length-1])}, pour tout le monde. <b>Budget prévu : ${eur(vy.budget)}</b>.`:'');
+  if(pl.del.length)li.push(`<b>Projets de test supprimés</b> (aucun argent noté) : ${esc(pl.del.map(p=>p.name).join(', '))}.`);
+  const warn=[];
+  if(vy&&vy.restZero&&vy.restZero.length)warn.push(`Le ski demande plus que ce qui reste des ${PLAN_TOTAL} € certains mois : le voyage 2028 ne recevra rien ces mois-là. Baisse le prix du ski ou augmente la cotisation.`);
+  if(pl.keep.length)warn.push(`Ces projets ont déjà de l’argent noté et ne sont pas touchés : ${esc(pl.keep.map(p=>p.name).join(', '))}. Leurs mois peuvent se partager les versements.`);
+  return `<ol class="planlist">${li.filter(Boolean).map(t=>`<li>${t}</li>`).join('')}</ol>${warn.map(t=>`<p class="warn">${t}</p>`).join('')}
+    ${withBtn?`<div class="actions"><button class="btn block" data-act="plan-apply">Appliquer le plan</button></div>`:''}`;
+}
+function planHome(c){
+  if(!W()||S.settings.plan150At||S.planLater)return '';
+  return `<section class="card plancard"><h2>Plan ${PLAN_TOTAL} € <small>prêt à appliquer</small></h2><p class="sub">Ce que l’appli va régler toute seule, en un geste :</p>${planHtml(true)}<button class="linkbtn" data-act="plan-later" style="margin-top:8px">Plus tard</button></section>`;
+}
+function planSettings(){
+  if(!W())return '';
+  return `<section class="card"><h2>Plan ${PLAN_TOTAL} € <small>${S.settings.plan150At?'appliqué '+fmtDateTime(S.settings.plan150At):'pas encore appliqué'}</small></h2>
+  <p class="sub">Ski, crédit et voyage 2028 avec ${PLAN_TOTAL} € par personne et par mois.</p><button class="btn ghost block" data-act="plan-open">${S.settings.plan150At?'Revoir et réappliquer':'Voir le plan'}</button></section>`;
+}
+function sheetPlan(){openSheet({render(){return `<h3>Plan ${PLAN_TOTAL} €</h3><p class="lead">Ce que l’appli va régler toute seule :</p>${planHtml(true)}`},act:{'plan-apply':b=>planApply(b)}})}
+async function planApply(b){
+  const pl=planBuild();if(b)b.disabled=true;
+  const ok=await w(async()=>{
+    const delIds=new Set(pl.del.map(p=>p.id));
+    const delExp=Object.values(S.expenses).filter(e=>delIds.has(expProject(e))).map(e=>e.id);
+    for(const id of delExp)await S.db.doc('expenses/'+id).delete();
+    for(const id of delIds)await S.db.doc('projects/'+id).delete();
+    if(pl.ski26&&pl.ski26Data)await S.db.doc('projects/'+pl.ski26.id).update(pl.ski26Data);
+    const sid=pl.ski27?pl.ski27.id:slug('Ski 2027');
+    if(pl.ski27)await S.db.doc('projects/'+sid).update(pl.ski27Data);else await S.db.doc('projects/'+sid).set(pl.ski27Data);
+    let eo=Math.max(0,...Object.values(S.expenses).map(x=>+x.order||0));
+    for(const l of pl.newLines){eo++;await S.db.doc('expenses/'+newId('e')).set({project:sid,label:l.label,planned:l.rest?null:l.planned,rest:!!l.rest,closed:false,note:l.note||'',order:eo,payments:[]})}
+    const vid=pl.v28?pl.v28.id:slug('Voyage 2028');
+    if(pl.v28)await S.db.doc('projects/'+vid).update(pl.v28Data);else await S.db.doc('projects/'+vid).set(pl.v28Data);
+    for(const p of pl.active)await S.db.doc('people/'+p.id).update({rates:pl.ratesFor(p)});
+    await S.db.doc('settings/main').update({plan150At:new Date().toISOString()});
+  },'Plan appliqué : 150 € pour tout le monde');
+  if(ok){if(sheetState)closeSheet();S.sel=null;render()}else if(b)b.disabled=false;
+}
+/* Les projets sans dates de cotisation gardent leurs mois actuels quand on en crée ou modifie un autre. */
+async function freezeLegacy(exceptId){
+  const c=calc();
+  for(const id of c.order){
+    const x=c.proj[id],pr=x.pr;
+    if(id===exceptId||pr.firstMonth||+pr.installments>0||!pr.month||!x.win.length)continue;
+    await S.db.doc('projects/'+id).update({firstMonth:x.win[0],endRule:'trip'});
+  }
+}
+/* ---------- invités et remboursements (comptes du voyage) ---------- */
+function sheetGuest(pid){
+  const pr=S.projects[pid];if(!pr)return;
+  const f={name:''};
+  const others=[...new Set(Object.values(S.projects).filter(q=>q.id!==pid).flatMap(q=>projGuests(q).map(g=>g.name)))].filter(n=>!projGuests(pr).some(g=>g.name===n));
+  openSheet({
+    render(){return `<h3>Ajouter un invité</h3><p class="lead">${esc(pr.name)} · il ne cotise pas chaque mois, il paie sa part du voyage.</p>
+      <div class="field"><label for="gu-n">Prénom</label><input id="gu-n" value="${esc(f.name)}" placeholder="ex. Tonton Marc" autocomplete="off"></div>
+      ${others.length?`<div class="pick sug" style="margin:-4px 0 12px">${others.map(n=>`<button type="button" data-act="gu-sug" data-v="${esc(n)}">${esc(n)}</button>`).join('')}</div>`:''}
+      <p class="note" style="margin-top:0">Il est compté dans toutes les dépenses « pour tout le monde ». Tu pourras le retirer d’une dépense en la modifiant.</p>
+      <div class="actions"><button class="btn block" data-act="gu-save">Ajouter</button></div>`},
+    bind(root){bindInputs(root,{'gu-n':'name'},f);const i=root.querySelector('#gu-n');if(i&&!f.name)setTimeout(()=>i.focus(),50)},
+    act:{
+      'gu-sug':b=>{f.name=b.dataset.v;drawSheet()},
+      'gu-save':async b=>{
+        const name=f.name.trim();if(!name){toast('Indique son prénom');return}
+        const cur=projGuests(S.projects[pid]);
+        if(cur.some(g=>g.name.toLowerCase()===name.toLowerCase())||Object.values(S.people).some(p=>String(p.name).toLowerCase()===name.toLowerCase())){toast(name+' est déjà dans la liste');return}
+        b.disabled=true;
+        const ok=await w(()=>S.db.doc('projects/'+pid).update({guests:cur.concat([{id:newId('g'),name}])}),name+' ajouté');
+        if(ok)closeSheet();else b.disabled=false;
+      }
+    }});
+}
+function guestUsed(pid,gid){
+  const pr=S.projects[pid];
+  return Object.values(S.expenses).some(e=>expProject(e)===pid&&((e.payments||[]).some(q=>q.by===gid)))||(pr.settles||[]).some(s=>s.from===gid||s.to===gid);
+}
+function sheetGuestDel(pid,gid){
+  const pr=S.projects[pid];if(!pr)return;const g=projGuests(pr).find(x=>x.id===gid);if(!g)return;
+  const used=guestUsed(pid,gid);
+  openSheet({
+    render(){return `<h3>Retirer ${esc(g.name)} ?</h3>
+      ${used?`<p class="lead">${esc(g.name)} a déjà payé quelque chose ou reçu un remboursement sur ce voyage. Retire d’abord ces lignes pour garder des comptes justes.</p><div class="actions"><button class="btn ghost block" data-act="gd-close">Fermer</button></div>`
+      :`<p class="lead">${esc(g.name)} ne sera plus compté dans les dépenses de ${esc(pr.name)}.</p><div class="actions"><button class="btn danger block" data-act="gd-ok">Retirer</button></div>`}`},
+    act:{
+      'gd-close':()=>closeSheet(),
+      'gd-ok':async b=>{
+        b.disabled=true;
+        const ok=await w(async()=>{
+          await S.db.doc('projects/'+pid).update({guests:projGuests(S.projects[pid]).filter(x=>x.id!==gid)});
+          for(const e of Object.values(S.expenses))if(expProject(e)===pid&&Array.isArray(e.split)&&e.split.includes(gid))await S.db.doc('expenses/'+e.id).update({split:e.split.filter(i=>i!==gid)});
+        },g.name+' retiré');
+        if(ok)closeSheet();else b.disabled=false;
+      }
+    }});
+}
+function sheetSettle(pid,pre){
+  const c=calc(),x=c.proj[pid];if(!x)return;const pr=x.pr;
+  const f={from:pre.from||'',to:pre.to||'pot',amount:pre.amount?fmtN(pre.amount):'',date:todayStr(),note:''};
+  const opts=[['pot','La cagnotte']].concat(x.ledger.parts.map(p=>[p,partName(pr,p)+(x.ledger.guests.some(g=>g.id===p)?' (invité)':'')]));
+  const sel=(id,v)=>`<select id="${id}">${id==='st-f'&&!v?'<option value="" selected>Choisir…</option>':''}${opts.map(([k,l])=>`<option value="${esc(k)}" ${v===k?'selected':''}>${esc(l)}</option>`).join('')}</select>`;
+  openSheet({
+    render(){
+      const pot=f.from==='pot'?'sort du livret':f.to==='pot'?'arrive sur le livret':'ne passe pas par le livret';
+      return `<h3>Remboursement</h3><p class="lead">${esc(pr.name)}</p>
+      <div class="field"><label for="st-f">Qui donne ?</label>${sel('st-f',f.from)}</div>
+      <div class="field"><label for="st-t">À qui ?</label>${sel('st-t',f.to)}</div>
+      <div class="fields2">
+        <div class="field"><label for="st-a">Montant (€)</label><input id="st-a" inputmode="decimal" data-calc value="${esc(f.amount)}"></div>
+        <div class="field"><label for="st-d">Le</label><input id="st-d" type="date" value="${esc(f.date)}"></div>
+      </div>
+      <div class="field"><label for="st-n">Note (facultatif)</label><input id="st-n" value="${esc(f.note)}" placeholder="ex. virement, espèces"></div>
+      ${f.from&&f.to&&f.from!==f.to?`<p class="note" style="margin-top:0">Cet argent ${pot}.</p>`:''}
+      <div class="actions"><button class="btn block" data-act="st-save">Enregistrer</button></div>`},
+    bind(root){
+      bindInputs(root,{'st-a':'amount','st-d':'date','st-n':'note'},f);
+      ['st-f','st-t'].forEach(i=>{const el=root.querySelector('#'+i);if(el)el.addEventListener('change',()=>{f[i==='st-f'?'from':'to']=el.value;drawSheet()})});
+    },
+    act:{'st-save':async b=>{
+      if(!f.from){toast('Choisis qui donne');return}
+      if(f.from===f.to){toast('Choisis deux personnes différentes');return}
+      const a=num(f.amount);if(!(a>0)){toast('Indique le montant');return}
+      const list=(S.projects[pid].settles||[]).map(s=>Object.assign({},s));
+      list.push({id:newId('r'),from:f.from,to:f.to,amount:r2(a),date:f.date||todayStr(),note:f.note.trim(),recordedAt:new Date().toISOString()});
+      b.disabled=true;
+      const ok=await w(()=>S.db.doc('projects/'+pid).update({settles:list}),'Remboursement noté');
+      if(ok)closeSheet();else b.disabled=false;
+    }}});
+}
+/* Choix des participants concernés par une dépense (seulement quand le voyage a des invités). */
+function splitPicker(act,x,sel){
+  if(!x||!x.ledger.guests.length)return '';
+  const all=!sel||!sel.length,set=new Set(all?x.ledger.parts:sel);
+  return `<span class="flabel">Pour qui ?</span><div class="pick" style="margin:4px 0 4px">${x.ledger.parts.map(p=>`<button type="button" data-act="${act}" data-id="${esc(p)}" aria-pressed="${set.has(p)}">${esc(partName(x.pr,p))}</button>`).join('')}</div>
+    <p class="note" style="margin:0 0 12px">${all?'Tout le monde.':`${set.size} personne${set.size>1?'s':''} sur ${x.ledger.parts.length}.`} Touche un nom pour le retirer ou le remettre.</p>`;
+}
+function toggleSplit(cur,x,id){
+  const parts=x.ledger.parts;let s=new Set(cur&&cur.length?cur:parts);
+  if(s.has(id)){if(s.size<=1){toast('Il faut au moins une personne');return cur}s.delete(id)}else s.add(id);
+  return s.size===parts.length?null:parts.filter(p=>s.has(p));
+}
+function payerSelect(id,x,v){
+  if(!x)return '';
+  const opts=[['','La cagnotte']].concat(x.ledger.parts.map(p=>[p,partName(x.pr,p)+' (de sa poche)']));
+  return `<div class="field"><label for="${id}">Payé par</label><select id="${id}">${opts.map(([k,l])=>`<option value="${esc(k)}" ${(v||'')===k?'selected':''}>${esc(l)}</option>`).join('')}</select></div>`;
+}
+
 function sheetExpNew(pid){
   const pr=S.projects[pid];if(!pr)return;
-  const f={label:'',planned:'',rest:false,state:'none',paidAmt:'',date:todayStr()};
+  const f={label:'',planned:'',rest:false,state:'none',paidAmt:'',date:todayStr(),split:null,by:''};
+  const x=calc().proj[pid];
   openSheet({
     render(){return `<h3>Nouvelle dépense</h3><p class="lead">${esc(pr.name)}</p>
       <div class="field"><label for="en-l">C’est quoi ?</label><input id="en-l" value="${esc(f.label)}" placeholder="ex. Location véhicule"></div>
       <div class="pick sug">${SUGGEST.map(s=>`<button type="button" data-act="en-sug" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+      ${splitPicker('en-split',x,f.split)}
       <span class="flabel">Combien ?</span>${seg('en-kind',f.rest?'rest':'fixed',[['fixed','Montant prévu'],['rest','Le reste du pot']])}
       ${f.rest?`<p class="note" style="margin:-4px 0 12px">Cette ligne prend ce qui reste dans la cagnotte pour ce voyage, idéal pour les courses et les restos. Tu notes les dépenses au fur et à mesure.</p>`:`
       <div class="field"><label for="en-p">Montant prévu (€)</label><input id="en-p" inputmode="decimal" data-calc value="${esc(f.planned)}" placeholder="ex. 170 × 2 (vide si pas estimé)"></div>
       <span class="flabel">Déjà payé ?</span>${seg('en-state',f.state,[['none','Rien'],['part','Une partie'],['all','Tout']])}
-      ${f.state==='none'?'':`<div class="fields2">${f.state==='part'?`<div class="field"><label for="en-a">Montant payé (€)</label><input id="en-a" inputmode="decimal" data-calc value="${esc(f.paidAmt)}"></div>`:''}<div class="field"><label for="en-d">Payé le</label><input id="en-d" type="date" value="${esc(f.date)}"></div></div>`}`}
+      ${f.state==='none'?'':`<div class="fields2">${f.state==='part'?`<div class="field"><label for="en-a">Montant payé (€)</label><input id="en-a" inputmode="decimal" data-calc value="${esc(f.paidAmt)}"></div>`:''}<div class="field"><label for="en-d">Payé le</label><input id="en-d" type="date" value="${esc(f.date)}"></div></div>${payerSelect('en-b',x,f.by)}`}`}
       <div class="actions"><button class="btn block" data-act="en-save">Ajouter la dépense</button></div>`},
-    bind(root){bindInputs(root,{'en-l':'label','en-p':'planned','en-a':'paidAmt','en-d':'date'},f)},
+    bind(root){bindInputs(root,{'en-l':'label','en-p':'planned','en-a':'paidAmt','en-d':'date','en-b':'by'},f)},
     act:{
+      'en-split':b=>{f.split=toggleSplit(f.split,x,b.dataset.id);drawSheet()},
       'en-sug':b=>{f.label=b.dataset.v;f.rest=/courses|resto/i.test(f.label);drawSheet()},
       'en-kind':b=>{f.rest=b.dataset.v==='rest';drawSheet()},
       'en-state':b=>{f.state=b.dataset.v;drawSheet()},
@@ -1428,12 +1891,13 @@ function sheetExpNew(pid){
         if(!f.rest){
           if(String(f.planned).trim()!==''){planned=num(f.planned);if(planned==null||planned<0){toast('Montant prévu invalide');return}}
           const at=new Date().toISOString(),date=f.date||todayStr();
-          if(f.state==='all'){if(!(planned>0)){toast('Indique le montant prévu');return}payments=[{id:newId('p'),amount:r2(planned),date,note:'',recordedAt:at}];closed=true}
-          if(f.state==='part'){const a=num(f.paidAmt);if(!(a>0)){toast('Indique le montant déjà payé');return}payments=[{id:newId('p'),amount:r2(a),date,note:'',recordedAt:at}]}
+          const by=f.by?{by:f.by}:{};
+          if(f.state==='all'){if(!(planned>0)){toast('Indique le montant prévu');return}payments=[Object.assign({id:newId('p'),amount:r2(planned),date,note:'',recordedAt:at},by)];closed=true}
+          if(f.state==='part'){const a=num(f.paidAmt);if(!(a>0)){toast('Indique le montant déjà payé');return}payments=[Object.assign({id:newId('p'),amount:r2(a),date,note:'',recordedAt:at},by)]}
         }
         const order=Math.max(0,...Object.values(S.expenses).map(x=>+x.order||0))+1;
         b.disabled=true;
-        const ok=await w(()=>S.db.doc('expenses/'+newId('e')).set({project:pid,label,planned:planned==null?null:r2(planned),rest:f.rest,closed,note:!f.rest&&hasOp(f.planned)?prettyExpr(f.planned):'',order,payments}));
+        const ok=await w(()=>S.db.doc('expenses/'+newId('e')).set({project:pid,label,planned:planned==null?null:r2(planned),rest:f.rest,closed,note:!f.rest&&hasOp(f.planned)?prettyExpr(f.planned):'',order,payments,split:f.split||null}));
         if(ok){closeSheet();toast('Dépense ajoutée')}else b.disabled=false;
       }
     }});
@@ -1445,25 +1909,29 @@ function sheetExpDetail(eid){
     render(){
       const e=S.expenses[eid];
       if(!e)return `<h3>Dépense</h3><p class="note">Cette dépense a été supprimée.</p>`;
-      const paid=sumPay(e),pr=S.projects[expProject(e)];
+      const paid=sumPay(e),pr=S.projects[expProject(e)],xp=calc().proj[expProject(e)];
       const rem=(e.rest||e.closed||e.planned==null)?null:Math.max(+e.planned-paid,0);
+      const sp=xp&&xp.ledger.guests.length?(Array.isArray(e.split)&&e.split.length?e.split.filter(i=>xp.ledger.parts.includes(i)):[]):null;
+      const forTxt=sp==null?'':`<p class="note" style="margin:8px 0 0">Pour ${sp.length?esc(sp.map(i=>partName(pr,i)).join(', '))+` · ${eur(expCost(e)/sp.length)} chacun`:`tout le monde · ${eur(expCost(e)/xp.ledger.parts.length)} chacun`}</p>`;
       const plannedTxt=e.rest?'le reste':e.closed?eur(paid):e.planned==null?'à estimer':eur(e.planned);
       const remTxt=e.closed?eur(0):rem==null?'—':eur(rem);
       const pays=[...(e.payments||[])].sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-      if(editing&&!d)d={label:e.label||'',planned:e.planned==null?'':isCalcNote(e.note)&&Math.abs(calcExpr(e.note)-e.planned)<0.005?e.note:fmtN(e.planned),rest:!!e.rest};
+      if(editing&&!d)d={label:e.label||'',planned:e.planned==null?'':isCalcNote(e.note)&&Math.abs(calcExpr(e.note)-e.planned)<0.005?e.note:fmtN(e.planned),rest:!!e.rest,split:sp&&sp.length?sp:null};
       const main=W()?(e.closed?`<div class="actions"><button class="btn ghost block" data-act="ed-reopen">Rouvrir la dépense</button></div>`:`<div class="actions"><button class="btn" data-act="ed-pay">${e.rest?'Noter une dépense':'Noter un paiement'}</button>${e.rest?'':`<button class="btn ghost" data-act="ed-close">Tout est payé</button>`}</div>`):'';
       const edit=!W()?'':editing?`<h4>Modifier</h4>
         <div class="field"><label for="ed-l">Nom</label><input id="ed-l" value="${esc(d.label)}"></div>
         ${seg('ed-kind',d.rest?'rest':'fixed',[['fixed','Montant prévu'],['rest','Le reste du pot']])}
         ${d.rest?'':`<div class="field"><label for="ed-p">Montant prévu (€)</label><input id="ed-p" inputmode="decimal" data-calc value="${esc(d.planned)}" placeholder="ex. 170 × 2 (vide si pas estimé)"></div>`}
+        ${splitPicker('ed-split',xp,d.split)}
         <div class="actions"><button class="btn" data-act="ed-save">Enregistrer</button><button class="btn ghost" data-act="ed-cancel">Annuler</button></div>`
-        :`<div class="actions" style="margin-top:14px"><button class="btn ghost block" data-act="ed-edit">Modifier le nom ou le montant prévu</button></div>`;
+        :`<div class="actions" style="margin-top:14px"><button class="btn ghost block" data-act="ed-edit">${sp==null?'Modifier le nom ou le montant prévu':'Modifier (nom, montant, pour qui)'}</button></div>`;
       return `<h3>${esc(e.label)}</h3>
       <p class="lead">${esc(pr?pr.name:'')}${e.closed?' · <span class="chip ok">Soldé</span>':''}${e.note?' · '+esc(e.note):''}</p>
       <div class="kpis"><div><span>Prévu</span><b>${plannedTxt}</b></div><div><span>Payé</span><b>${eur(paid)}</b></div><div><span>Reste</span><b>${remTxt}</b></div></div>
+      ${forTxt}
       ${main}
-      <h4>Sorties du livret</h4>
-      ${pays.length?`<div class="rows">${pays.map(x=>`<div class="row"><div class="l">${fmtDate(x.date)}${x.note?` · <span class="muted">${esc(x.note)}</span>`:''}</div><div class="r" style="flex-direction:row;align-items:center;gap:8px">${eur(x.amount)}${W()?`<button class="x" data-act="ed-rmp" data-id="${esc(x.id)}" aria-label="Retirer ce paiement">×</button>`:''}</div></div>`).join('')}</div>`:`<p class="note">Rien de payé pour l’instant.</p>`}
+      <h4>${pays.some(x=>x.by)?'Paiements':'Sorties du livret'}</h4>
+      ${pays.length?`<div class="rows">${pays.map(x=>`<div class="row"><div class="l">${fmtDate(x.date)}${x.by?` · <b>avancé par ${esc(partName(pr,x.by))}</b>`:''}${x.note?` · <span class="muted">${esc(x.note)}</span>`:''}</div><div class="r" style="flex-direction:row;align-items:center;gap:8px">${eur(x.amount)}${W()?`<button class="x" data-act="ed-rmp" data-id="${esc(x.id)}" aria-label="Retirer ce paiement">×</button>`:''}</div></div>`).join('')}</div>`:`<p class="note">Rien de payé pour l’instant.</p>`}
       ${edit}
       ${W()?`<div class="actions"><button class="btn danger block" data-act="ed-del">${confirmDel?'Confirmer la suppression':'Supprimer la dépense'}</button></div>`:''}`;
     },
@@ -1475,11 +1943,13 @@ function sheetExpDetail(eid){
       'ed-edit':()=>{editing=true;d=null;drawSheet()},
       'ed-cancel':()=>{editing=false;d=null;drawSheet()},
       'ed-kind':b=>{d.rest=b.dataset.v==='rest';drawSheet()},
+      'ed-split':b=>{const e=S.expenses[eid];const xp=e&&calc().proj[expProject(e)];if(xp){d.split=toggleSplit(d.split,xp,b.dataset.id);drawSheet()}},
       'ed-save':async()=>{
         const label=d.label.trim();if(!label){toast('Donne un nom');return}
         let planned=null;
         if(!d.rest&&String(d.planned).trim()!==''){planned=num(d.planned);if(planned==null||planned<0){toast('Montant prévu invalide');return}}
         const upd={label,planned:planned==null?null:r2(planned),rest:!!d.rest},e0=S.expenses[eid];
+        const xp0=e0&&calc().proj[expProject(e0)];if(xp0&&xp0.ledger.guests.length)upd.split=d.split||null;
         /* le calcul va dans la note, sauf si la note a été écrite à la main */
         const free=!e0||!e0.note||isCalcNote(e0.note);
         if(free&&!d.rest&&hasOp(d.planned))upd.note=prettyExpr(d.planned);else if(free&&e0&&e0.note)upd.note='';
@@ -1503,10 +1973,12 @@ function sheetExpDetail(eid){
 function sheetExpPay(eid,o={}){
   const e0=S.expenses[eid];if(!e0)return;
   const rem0=(e0.rest||e0.planned==null)?null:Math.max(+e0.planned-sumPay(e0),0);
-  const f={amount:rem0?fmtN(rem0):'',date:todayStr(),note:'',close:!!o.close};
+  const f={amount:rem0?fmtN(rem0):'',date:todayStr(),note:'',close:!!o.close,by:''};
+  const x=calc().proj[expProject(e0)];
   openSheet({
     render(){return `<h3>${e0.rest?'Dépense':'Paiement'} · ${esc(e0.label)}</h3>
-      <p class="lead">Ce montant sort du livret.${rem0!=null?` Reste à payer : ${eur(rem0)}.`:''}</p>
+      <p class="lead">${f.by?`Avancé par ${esc(partName(x.pr,f.by))} : ça ne sort pas du livret, l’appli le note dans les comptes du voyage.`:'Ce montant sort du livret.'}${rem0!=null?` Reste à payer : ${eur(rem0)}.`:''}</p>
+      ${payerSelect('xp-b',x,f.by)}
       <div class="fields2">
         <div class="field"><label for="xp-a">Montant (€)</label><input id="xp-a" inputmode="decimal" data-calc value="${esc(f.amount)}"></div>
         <div class="field"><label for="xp-d">Payé le</label><input id="xp-d" type="date" value="${esc(f.date)}"></div>
@@ -1516,6 +1988,7 @@ function sheetExpPay(eid,o={}){
       <div class="actions"><button class="btn block" data-act="xp-save">Enregistrer</button></div>`},
     bind(root){
       bindInputs(root,{'xp-d':'date','xp-n':'note','xp-c':'close'},f);
+      const pb=root.querySelector('#xp-b');if(pb)pb.addEventListener('change',()=>{f.by=pb.value;drawSheet()});
       const a=root.querySelector('#xp-a');a.addEventListener('input',()=>{f.amount=a.value;const v=num(a.value),cb=root.querySelector('#xp-c');if(cb&&rem0>0&&v!=null&&v>=rem0){cb.checked=true;f.close=true}});
     },
     act:{'xp-save':async b=>{
@@ -1523,7 +1996,7 @@ function sheetExpPay(eid,o={}){
       if(!(a>0)&&!f.close){toast('Indique un montant');return}
       const e=S.expenses[eid];if(!e)return;
       const list=(e.payments||[]).map(x=>Object.assign({},x));
-      if(a>0)list.push({id:newId('p'),amount:r2(a),date:f.date||todayStr(),note:f.note.trim()||(hasOp(f.amount)?prettyExpr(f.amount):''),recordedAt:new Date().toISOString()});
+      if(a>0)list.push(Object.assign({id:newId('p'),amount:r2(a),date:f.date||todayStr(),note:f.note.trim()||(hasOp(f.amount)?prettyExpr(f.amount):''),recordedAt:new Date().toISOString()},f.by?{by:f.by}:{}));
       const upd={payments:list};if(f.close)upd.closed=true;
       b.disabled=true;
       const ok=await w(()=>S.db.doc('expenses/'+eid).update(upd));
@@ -1810,6 +2283,9 @@ view.addEventListener('click',e=>{
   else if(a==='backup')exportBackup();
   else if(a==='import')pickImport();
   else if(a==='share-state')sheetNotify(null);
+  else if(a==='plan-apply'){if(W())planApply(b)}
+  else if(a==='plan-later'){S.planLater=true;render()}
+  else if(a==='plan-open'){if(W())sheetPlan()}
   else if(a==='rate-new'){if(W())sheetRate(b.dataset.pid)}
   else if(a==='rate-del'){
     const pid=b.dataset.pid,from=b.dataset.from,key=pid+'@'+from;
@@ -1830,6 +2306,11 @@ view.addEventListener('click',e=>{
   else if(a==='show-all'){S.showAll=!S.showAll;render()}
   else if(a==='go-proj'){S.sel=b.dataset.id}
   else if(a==='proj-sel'){S.sel=b.dataset.id;render()}
+  else if(a==='guest-new'){if(W())sheetGuest(b.dataset.pid)}
+  else if(a==='guest-del'){if(W())sheetGuestDel(b.dataset.pid,b.dataset.id)}
+  else if(a==='settle-new'){if(W())sheetSettle(b.dataset.pid,{})}
+  else if(a==='settle-done'){if(!W())return;const x=calc().proj[b.dataset.pid];const s=x&&settleSuggestions(x)[+b.dataset.i];if(s)sheetSettle(b.dataset.pid,s)}
+  else if(a==='settle-del'){const id=b.dataset.id,pid=b.dataset.pid;if(S.delArm!==id){S.delArm=id;render();return}S.delArm=null;w(()=>S.db.doc('projects/'+pid).update({settles:(S.projects[pid].settles||[]).filter(s=>s.id!==id)}),'Remboursement retiré')}
   else if(a==='proj-new'){if(W())sheetWizard()}
   else if(a==='proj-edit'){if(W())sheetProject(b.dataset.id)}
   else if(a==='exp')sheetExpDetail(b.dataset.e);
@@ -1858,7 +2339,7 @@ view.addEventListener('change',async e=>{
 });
 
 /* ---------- version et mise à jour ---------- */
-const APP_VERSION='v7 · 8 nov. 2026';
+const APP_VERSION='v13 · 8 nov. 2026';
 /* Vide la copie hors connexion (pas les données) et recharge la dernière version publiée. */
 async function forceUpdate(btn){
   if(btn){btn.disabled=true;btn.textContent='Mise à jour…'}
