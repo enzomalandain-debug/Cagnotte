@@ -206,6 +206,12 @@ h3.mini{font-family:var(--f-display);font-size:16px;margin:14px 0 2px}
 .pos{color:var(--ok)}
 .plancard{box-shadow:inset 0 0 0 2px var(--accent)}
 .planlist{margin:4px 0 6px;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:14px;line-height:1.4}
+.effects{margin-top:8px;font-size:13.5px;color:var(--ink)}
+.effects>span{font-size:12.5px;font-weight:600;color:var(--muted)}
+.effects ul{margin:4px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.goalres .effects b{display:inline;font-family:inherit;font-size:inherit;font-weight:700;color:var(--ink);margin:0;line-height:inherit}
+.goalres .effects li{line-height:1.4}
+.linenote{margin:-4px 0 8px;font-size:12px;color:var(--muted)}
 .restflow{margin-top:8px}
 .restflow>span{font-size:12.5px;font-weight:600;color:var(--muted)}
 .restflow .sched{background:var(--surface);margin:4px 0 0}
@@ -833,7 +839,7 @@ function tricountCard(c,x){
   }else body=`<p class="note">Un membre de la famille vient sans cotiser chaque mois ? Ajoute-le comme invité : l’appli calcule sa part du voyage. Quand quelqu’un avance une dépense de sa poche, note-le au paiement : l’appli dit qui rembourse qui.</p>`;
   return `<section class="card">
   <h2>Participants et comptes <small>${L.parts.length} participant${L.parts.length>1?'s':''}${L.guests.length?` dont ${L.guests.length} invité${L.guests.length>1?'s':''}`:''}</small></h2>
-  <div class="pchips">${chips}${edit?`<button type="button" class="pchip add" data-act="guest-new" data-pid="${id}">+ Ajouter un invité</button>`:''}</div>
+  <div class="pchips">${chips}${edit?`<button type="button" class="pchip add" data-act="members" data-pid="${id}">+ Ajouter un participant</button>`:''}</div>
   ${body}
 </section>`;
 }
@@ -863,7 +869,7 @@ ${goalCard(c,x)}
 <section class="card">
   <h2>Dépenses <small>${x.exps.length?x.exps.length+' ligne'+(x.exps.length>1?'s':''):''}</small></h2>
   ${x.exps.length?`<div>${x.exps.map(e=>expRow(e,x)).join('')}</div>`:`<p class="note">Aucune dépense pour ce voyage. Ajoute la première : logement, transport, activités…</p>`}
-  ${W()&&!x.passed?`<div class="actions" style="margin-top:10px"><button class="btn block" data-act="exp-new" data-id="${esc(sid)}">Ajouter une dépense</button></div>`:''}
+  ${W()?`<div class="actions" style="margin-top:10px">${!x.passed?`<button class="btn" data-act="exp-new" data-id="${esc(sid)}">Ajouter une dépense</button>`:''}${x.exps.length?`<button class="btn ghost" data-act="exp-bulk" data-id="${esc(sid)}">Modifier les dépenses</button>`:''}</div>`:''}
 </section>
 ${tricountCard(c,x)}`;
 }
@@ -946,7 +952,7 @@ function render(){
   if(cur)tripEl.textContent=cur.pr.name+(cur.pr.month?' · '+MOIS_C[+cur.pr.month.slice(5)-1]+' '+cur.pr.month.slice(2,4):'');
   view.innerHTML=r==='versements'?vPay(c):r==='voyages'?vTrips(c):r==='reglages'?vSet(c):vHome(c);
 }
-function refresh(){render();if(sheetState&&sheetState.live&&!isTyping(sheetEl))drawSheet()}
+function refresh(){render();if(sheetState&&sheetState.live&&!isTyping(sheetEl))drawSheet();if(!notesCleaned&&allReady())setTimeout(cleanCopiedNotes,0)}
 view.addEventListener('focusout',()=>{if(pendingRender)setTimeout(()=>{if(!isTyping(view))render()},0)});
 window.addEventListener('hashchange',()=>{render();window.scrollTo(0,0)});
 
@@ -1653,6 +1659,19 @@ const namesOf=ids=>ids.map(i=>S.people[i]?S.people[i].name:'').filter(Boolean).j
    Dès janv. 2027 : 150 € par personne. Le crédit d'abord (jusqu'à sa fin), puis ce qu'il faut pour le Ski 2027,
    et le reste pour le Voyage 2028. Les projets de test sans argent noté sont supprimés. */
 const PLAN_TOTAL=150,PLAN_FROM='2027-01';
+/* Quand on recopie une dépense d'un voyage passé, on garde un calcul (« 170 € × 2 ») mais pas une note de paiement. */
+const copyNote=n=>n&&/[x×]\s*\d/i.test(n)?n:'';
+/* Nettoyage (une fois) : les notes de paiement recopiées par erreur dans les dépenses d'un nouveau voyage. */
+let notesCleaned=false;
+async function cleanCopiedNotes(){
+  if(notesCleaned||!W()||!allReady()||!S.settings||S.settings.notesClean1)return;notesCleaned=true;
+  const all=Object.values(S.expenses),fix=[];
+  for(const e of all){
+    if(!e.note||(e.payments||[]).length||copyNote(e.note))continue;
+    if(all.some(o=>o!==e&&expProject(o)!==expProject(e)&&o.label===e.label&&o.note===e.note&&(o.payments||[]).length))fix.push(e.id);
+  }
+  try{for(const id of fix)await S.db.doc('expenses/'+id).update({note:''});await S.db.doc('settings/main').update({notesClean1:true})}catch(err){console.error(err)}
+}
 const plannedTotal=pid=>r2(Object.values(S.expenses).filter(e=>expProject(e)===pid).reduce((s,e)=>s+expCost(e),0));
 function projHasMoney(pid){
   const pr=S.projects[pid]||{};
@@ -1675,7 +1694,7 @@ function planBuild(){
     :(ski26&&c0.proj[ski26.id]&&c0.proj[ski26.id].members.length?c0.proj[ski26.id].members:active.map(p=>p.id));
   const hasPrice=!!(ski27&&priceOf(ski27)>0);
   const newLines=hasPrice||!ski26?[]:sortedExpenses().filter(e=>expProject(e)===ski26.id)
-    .map(e=>e.rest?{label:e.label,rest:true}:{label:e.label,planned:r2(expCost(e)),note:e.note||''}).filter(l=>l.rest||l.planned>0);
+    .map(e=>e.rest?{label:e.label,rest:true}:{label:e.label,planned:r2(expCost(e)),note:copyNote(e.note)}).filter(l=>l.rest||l.planned>0);
   const nextOrder=Math.max(0,...prs.map(p=>+p.order||0))+1;
   const ski26Data=ski26&&!ski26.firstMonth?{firstMonth:(c0.proj[ski26.id]&&c0.proj[ski26.id].win[0])||st.startMonth,endRule:'trip'}:null;
   const skiMonth=ski27?mo(ski27):(ski26?addMonth(mo(ski26),12):'2027-12');
@@ -1766,6 +1785,164 @@ async function freezeLegacy(exceptId){
     await S.db.doc('projects/'+id).update({firstMonth:x.win[0],endRule:'trip'});
   }
 }
+/* ---------- simulation : ce qui change partout avant d'enregistrer ---------- */
+function simWith(mod){
+  const save=[S.projects,S.expenses,S.people];
+  const D={projects:JSON.parse(JSON.stringify(S.projects)),expenses:JSON.parse(JSON.stringify(S.expenses)),people:JSON.parse(JSON.stringify(S.people))};
+  mod(D);S.projects=D.projects;S.expenses=D.expenses;S.people=D.people;
+  try{return calc()}finally{S.projects=save[0];S.expenses=save[1];S.people=save[2]}
+}
+/* Liste lisible des changements : prix, part par personne, budget, pour chaque projet touché. */
+function effectsHtml(c0,c1){
+  const out=[];
+  for(const id of c1.order){
+    const a=c0.proj[id],b=c1.proj[id];if(!b||b.passed)continue;const n=esc(b.pr.name);
+    if(!a){out.push(`<b>${n}</b> : nouveau projet`);continue}
+    const ch=[];
+    if(b.mode==='expenses'||b.mode==='goal'){if(Math.abs((a.goal||0)-(b.goal||0))>0.005)ch.push(`prix ${eur(a.goal||0)} → ${eur(b.goal||0)}`);if((a.target||0)!==(b.target||0))ch.push(`${eur(a.target||0)} → <b>${eur(b.target||0)}</b> par personne et par mois`)}
+    if(b.budget!=null&&Math.abs((a.budget||0)-b.budget)>0.5)ch.push(`budget ${eur(a.budget||0)} → <b>${eur(b.budget)}</b>`);
+    if(a.members.length!==b.members.length)ch.push(`${a.members.length} → ${b.members.length} cotisants`);
+    if(a.ledger.guests.length!==b.ledger.guests.length)ch.push(`${a.ledger.guests.length} → ${b.ledger.guests.length} invités`);
+    if(!ch.length&&Math.abs(a.available-b.available)>0.5)ch.push(`reste ${eur(a.available)} → ${eur(b.available)}`);
+    if(ch.length)out.push(`<b>${n}</b> : ${ch.join(' · ')}`);
+  }
+  return out.length?`<div class="effects"><span>Ce qui change</span><ul>${out.map(t=>`<li>${t}</li>`).join('')}</ul></div>`:`<div class="effects"><span>Rien ne change dans les calculs.</span></div>`;
+}
+
+/* ---------- modifier toutes les dépenses d'un voyage ---------- */
+function sheetExpBulk(pid){
+  const pr=S.projects[pid];if(!pr)return;
+  const exps=sortedExpenses().filter(e=>expProject(e)===pid);
+  const calcAmt=e=>isCalcNote(e.note)&&e.planned!=null&&Math.abs(calcExpr(e.note)-e.planned)<0.005?e.note:(e.planned==null?'':fmtN(e.planned));
+  const f={lines:exps.map(e=>({id:e.id,label:e.label||'',amount:e.rest?'':calcAmt(e),rest:!!e.rest,closed:!!e.closed,paid:r2(sumPay(e)),locked:(e.payments||[]).length>0,del:false,orig:e}))};
+  const live=()=>f.lines.filter(l=>!l.del);
+  const costOf=l=>l.rest||l.closed?l.paid:Math.max(num(l.amount)||0,l.paid);
+  const plan=()=>{/* les lignes telles qu'elles seront enregistrées */
+    const out=[];
+    for(const l of f.lines){
+      if(l.del){if(l.id)out.push({del:true,id:l.id});continue}
+      const label=l.label.trim(),raw=String(l.amount).trim();
+      if(!l.id&&!label&&!raw)continue;
+      let planned=l.orig?l.orig.planned:null;
+      if(!l.rest&&!l.closed){if(raw===''){planned=null}else{const v=num(raw);if(v==null||v<0)return {err:`Montant à corriger : ${label||'nouvelle ligne'}`};planned=r2(v)}}
+      out.push({id:l.id,label:label||'Autre dépense',planned,raw,rest:l.rest,closed:l.closed,orig:l.orig});
+    }
+    return {ops:out};
+  };
+  const sim=()=>{const p=plan();if(p.err)return null;return simWith(D=>{
+    let i=0;for(const o of p.ops){
+      if(o.del){delete D.expenses[o.id];continue}
+      if(o.id)Object.assign(D.expenses[o.id],{label:o.label,planned:o.planned});
+      else{const k='__n'+(i++);D.expenses[k]={id:k,project:pid,label:o.label,planned:o.planned,rest:false,closed:false,note:'',order:999+i,payments:[]}}
+    }
+  })};
+  const res=()=>{const c1=sim();if(!c1)return `<span class="neg">${esc(plan().err)}</span>`;const total=r2(live().reduce((s,l)=>s+costOf(l),0));return `<b>${eur(total)}</b>total des dépenses du voyage${effectsHtml(calc(),c1)}`};
+  openSheet({
+    render(){return `<h3>Dépenses · ${esc(pr.name)}</h3><p class="lead">Change les noms et les montants, ajoute ou retire des lignes. L’appli recalcule tout quand tu enregistres.</p>
+      <div id="eb-lines" data-calc-host>${f.lines.map((l,i)=>l.del?'':`<div class="line"><input id="eb-l${i}" data-i="${i}" data-k="label" value="${esc(l.label)}" placeholder="Dépense" aria-label="Dépense"><input id="eb-a${i}" data-i="${i}" data-k="amount" inputmode="decimal" ${l.rest||l.closed?'disabled':'data-calc'} value="${esc(l.amount)}" placeholder="${l.rest?'reste':l.closed?'soldé':'€'}" aria-label="Montant de ${esc(l.label||'la dépense')}"><button type="button" class="x" data-act="eb-rm" data-i="${i}" ${l.locked?'disabled title="Déjà payée : retire d’abord ses paiements"':''} aria-label="Retirer">×</button></div>${l.rest||l.closed||l.paid>0?`<p class="linenote">${l.rest?'prend le reste du pot':l.closed?'soldée':'déjà payé'} ${l.paid>0?'· '+eur(l.paid)+' payés':''}</p>`:''}`).join('')}</div>
+      <div class="pick sug" style="margin:6px 0 10px">${SUGGEST.filter(s=>!live().some(l=>l.label.toLowerCase()===s.toLowerCase())).map(s=>`<button type="button" data-act="eb-add" data-v="${esc(s)}">+ ${esc(s)}</button>`).join('')}<button type="button" data-act="eb-add" data-v="">+ Autre</button></div>
+      <div class="goalres" id="eb-res">${res()}</div>
+      <div class="actions"><button class="btn block" data-act="eb-save">Enregistrer</button></div>`},
+    bind(root){
+      root.querySelectorAll('#eb-lines input').forEach(el=>el.addEventListener('input',()=>{f.lines[+el.dataset.i][el.dataset.k]=el.value;const o=root.querySelector('#eb-res');if(o)o.innerHTML=res()}));
+    },
+    act:{
+      'eb-add':b=>{const lb=b.dataset.v||'';f.lines.push({id:null,label:lb,amount:'',rest:false,closed:false,paid:0,locked:false,del:false,orig:null});drawSheet();const i=f.lines.length-1;setTimeout(()=>{const el=sheetBody.querySelector('#eb-'+(lb?'a':'l')+i);if(el)el.focus()},0)},
+      'eb-rm':b=>{const l=f.lines[+b.dataset.i];if(!l||l.locked)return;if(l.id)l.del=true;else f.lines.splice(+b.dataset.i,1);drawSheet()},
+      'eb-save':async b=>{
+        const p=plan();if(p.err){toast(p.err);return}
+        b.disabled=true;
+        let eo=Math.max(0,...Object.values(S.expenses).map(x=>+x.order||0));
+        const ok=await w(async()=>{
+          for(const o of p.ops){
+            if(o.del){await S.db.doc('expenses/'+o.id).delete();continue}
+            const noteFree=!o.orig||!o.orig.note||isCalcNote(o.orig.note);
+            const note=noteFree?(hasOp(o.raw)?prettyExpr(o.raw):''):o.orig.note;
+            if(o.id){
+              const e=o.orig,upd={};
+              if(o.label!==e.label)upd.label=o.label;
+              if(!o.rest&&!o.closed&&(o.planned??null)!==(e.planned??null))upd.planned=o.planned;
+              if(noteFree&&note!==(e.note||''))upd.note=note;
+              if(Object.keys(upd).length)await S.db.doc('expenses/'+o.id).update(upd);
+            }else{eo++;await S.db.doc('expenses/'+newId('e')).set({project:pid,label:o.label,planned:o.planned,rest:false,closed:false,note,order:eo,payments:[],split:null})}
+          }
+        },'Dépenses enregistrées');
+        if(ok)closeSheet();else b.disabled=false;
+      }
+    }});
+}
+
+/* ---------- ajouter ou retirer des participants ---------- */
+function sheetMembers(pid){
+  const c0=calc(),x0=c0.proj[pid];if(!x0)return;const pr=x0.pr;
+  const people=sortedPeople().filter(p=>p.active!==false||x0.members.includes(p.id));
+  const ce=S.settings.creditEndMonth;
+  const fromDef=[nextFreeMonth(),x0.win[0]||nextFreeMonth()].sort().pop();
+  const f={mem:new Set(x0.members),name:'',kind:'cot',from:fromDef,monthly:fmtN(usualMonthly(people.map(p=>p.id),fromDef)),credit:false};
+  const crAmt=()=>{const cnt={};people.forEach(p=>{const v=rateFor(p,f.from).credit;if(v>0)cnt[v]=(cnt[v]||0)+1});const k=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];return k?+k:50};
+  const crOpen=()=>!!(ce&&isMonth(f.from)&&f.from<=ce&&+S.settings.creditMonthly>0);
+  const draft=()=>{
+    const name=f.name.trim();if(!name)return {};
+    if(people.concat(Object.values(S.people)).some(p=>String(p.name).toLowerCase()===name.toLowerCase())||projGuests(pr).some(g=>g.name.toLowerCase()===name.toLowerCase()))return {err:name+' est déjà dans la liste'};
+    if(f.kind==='guest')return {guest:{id:newId('g'),name}};
+    const m=num(f.monthly);if(!(m>0))return {err:'Indique ce que '+name+' met par mois'};
+    if(!isMonth(f.from))return {err:'Choisis le mois de départ'};
+    const cr=f.credit&&crOpen()?Math.min(crAmt(),m):0;
+    return {person:{id:slug(name),name,fromMonth:f.from,untilMonth:null,monthly:r2(m),ski:r2(m-cr),credit:r2(cr),active:true,order:Math.max(0,...Object.values(S.people).map(p=>+p.order||0))+1}};
+  };
+  const memList=d=>sortedPeople().map(p=>p.id).filter(i=>f.mem.has(i)).concat(d&&d.person?[d.person.id]:[]);
+  const sim=d=>simWith(D=>{
+    if(d.person)D.people[d.person.id]=Object.assign({},d.person);
+    const P=D.projects[pid];P.members=memList(d);
+    if(!P.firstMonth&&x0.win.length){P.firstMonth=x0.win[0];P.endRule='trip'}
+    if(d.guest)P.guests=projGuests(P).concat([d.guest]);
+  });
+  const res=()=>{const d=draft();if(d.err)return `<span class="neg">${esc(d.err)}</span>`;if(!memList(d).length&&!projGuests(pr).length&&!d.guest)return 'Choisis au moins un participant.';return effectsHtml(c0,sim(d))};
+  openSheet({
+    render(){
+      const d=draft();
+      return `<h3>Participants · ${esc(pr.name)}</h3><p class="lead">Coche qui participe, ou ajoute quelqu’un de nouveau. L’appli recalcule tout.</p>
+      <span class="flabel">Cotisants de la cagnotte</span>
+      <div class="pick" style="margin:4px 0 14px">${people.map(p=>`<button type="button" data-act="mb-m" data-id="${esc(p.id)}" aria-pressed="${f.mem.has(p.id)}">${esc(p.name)}</button>`).join('')}</div>
+      <h4>Quelqu’un de nouveau</h4>
+      <div class="field"><label for="mb-n">Prénom</label><input id="mb-n" value="${esc(f.name)}" placeholder="ex. Manon" autocomplete="off"></div>
+      ${seg('mb-kind',f.kind,[['cot','Cotise chaque mois'],['guest','Juste ce voyage']])}
+      ${f.kind==='cot'?`<div class="fields2">
+        <div class="field"><label for="mb-f">Cotise à partir de</label><input id="mb-f" type="month" value="${esc(f.from)}"></div>
+        <div class="field"><label for="mb-a">Par mois (€)</label><input id="mb-a" inputmode="decimal" value="${esc(f.monthly)}"></div>
+      </div>
+      ${crOpen()?`<div class="checks"><label class="check"><input id="mb-cr" data-act="mb-cr" type="checkbox" ${f.credit?'checked':''}> Paie aussi le crédit (${eur(crAmt())} par mois jusqu’en ${mYear(ce).toLowerCase()})</label></div>
+      <p class="note" style="margin:-6px 0 12px">${f.credit?`${eur(crAmt())} de sa cotisation iront au crédit jusqu’en ${mYear(ce).toLowerCase()}.`:'Toute sa cotisation ira aux voyages : le crédit vient d’un ancien voyage.'}</p>`:''}
+      <p class="note" style="margin:0 0 12px">Il est ajouté aux cotisants (tableau des versements) et à ce voyage.</p>`
+      :`<p class="note" style="margin:-4px 0 12px">Il ne cotise pas chaque mois : il paie sa part des dépenses de ce voyage (carte « Participants et comptes »).</p>`}
+      <div class="goalres" id="mb-res">${res()}</div>
+      <div class="actions"><button class="btn block" data-act="mb-save">Enregistrer</button></div>`},
+    bind(root){
+      const upd=()=>{const o=root.querySelector('#mb-res');if(o)o.innerHTML=res()};
+      const on=(id,k,redraw)=>{const el=root.querySelector('#'+id);if(el){el.addEventListener('input',()=>{f[k]=el.value;upd()});if(redraw)el.addEventListener('change',()=>{f[k]=el.value;drawSheet()})}};
+      on('mb-n','name');on('mb-a','monthly');on('mb-f','from',true);
+    },
+    act:{
+      'mb-m':b=>{const id=b.dataset.id;if(f.mem.has(id))f.mem.delete(id);else f.mem.add(id);drawSheet()},
+      'mb-kind':b=>{f.kind=b.dataset.v;drawSheet()},
+      'mb-cr':()=>{f.credit=!f.credit;drawSheet()},
+      'mb-save':async b=>{
+        const d=draft();if(d.err){toast(d.err);return}
+        const mem=memList(d);if(!mem.length&&!projGuests(pr).length&&!d.guest){toast('Choisis au moins un participant');return}
+        b.disabled=true;
+        const ok=await w(async()=>{
+          if(d.person){const p=Object.assign({},d.person);delete p.id;await S.db.doc('people/'+d.person.id).set(p)}
+          const upd={members:mem};
+          if(!pr.firstMonth&&x0.win.length){upd.firstMonth=x0.win[0];upd.endRule='trip'}
+          if(d.guest)upd.guests=projGuests(S.projects[pid]).concat([d.guest]);
+          await freezeLegacy(pid);
+          await S.db.doc('projects/'+pid).update(upd);
+        },d.person?d.person.name+' ajouté':d.guest?d.guest.name+' ajouté comme invité':'Participants enregistrés');
+        if(ok)closeSheet();else b.disabled=false;
+      }
+    }});
+}
+
 /* ---------- invités et remboursements (comptes du voyage) ---------- */
 function sheetGuest(pid){
   const pr=S.projects[pid];if(!pr)return;
@@ -2307,6 +2484,8 @@ view.addEventListener('click',e=>{
   else if(a==='go-proj'){S.sel=b.dataset.id}
   else if(a==='proj-sel'){S.sel=b.dataset.id;render()}
   else if(a==='guest-new'){if(W())sheetGuest(b.dataset.pid)}
+  else if(a==='members'){if(W())sheetMembers(b.dataset.pid)}
+  else if(a==='exp-bulk'){if(W())sheetExpBulk(b.dataset.id)}
   else if(a==='guest-del'){if(W())sheetGuestDel(b.dataset.pid,b.dataset.id)}
   else if(a==='settle-new'){if(W())sheetSettle(b.dataset.pid,{})}
   else if(a==='settle-done'){if(!W())return;const x=calc().proj[b.dataset.pid];const s=x&&settleSuggestions(x)[+b.dataset.i];if(s)sheetSettle(b.dataset.pid,s)}
@@ -2339,7 +2518,7 @@ view.addEventListener('change',async e=>{
 });
 
 /* ---------- version et mise à jour ---------- */
-const APP_VERSION='v13 · 8 nov. 2026';
+const APP_VERSION='v14 · 8 nov. 2026';
 /* Vide la copie hors connexion (pas les données) et recharge la dernière version publiée. */
 async function forceUpdate(btn){
   if(btn){btn.disabled=true;btn.textContent='Mise à jour…'}
