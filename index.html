@@ -203,6 +203,13 @@ h3.mini{font-family:var(--f-display);font-size:16px;margin:14px 0 2px}
 .checks{display:flex;gap:6px 18px;flex-wrap:wrap;margin:-2px 0 12px}
 .check{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500}
 .check input{width:20px;height:20px;accent-color:var(--accent)}
+.calckeys{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.calckeys button{flex:1 1 0;min-width:30px;max-width:52px;height:34px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);font-size:19px;font-weight:600;line-height:1;padding:0;touch-action:manipulation}
+.calckeys button:active{background:var(--accent-soft)}
+.calcres{flex:1 1 100%;font-size:13px;font-weight:600;color:var(--accent)}
+.calcres:empty{display:none}
+.calcres.bad{color:var(--muted);font-weight:500}
+#wz-lines+.calckeys{margin:-2px 0 10px}
 .x{border:0;background:var(--surface-2);color:var(--muted);width:30px;height:30px;border-radius:50%;font-size:18px;line-height:1}
 
 /* tabs */
@@ -268,7 +275,21 @@ const nf2=new Intl.NumberFormat('fr-FR',{style:'currency',currency:'EUR',minimum
 const nf0=new Intl.NumberFormat('fr-FR',{style:'currency',currency:'EUR',maximumFractionDigits:0});
 const eur=n=>{n=r2(n);return Number.isInteger(n)?nf0.format(n):nf2.format(n)};
 const fmtN=n=>{n=r2(n);return Number.isInteger(n)?String(n):n.toFixed(2).replace('.',',')};
-const num=v=>{if(v===''||v==null)return null;const x=parseFloat(String(v).replace(/[\s €]/g,'').replace(',','.'));return Number.isFinite(x)?x:null};
+/* Petits calculs dans les montants : 170 x 2, 170 × 2 + 120 × 2, 600 / 6. Pas d'eval. */
+function calcExpr(v){
+  if(v==null)return null;
+  const s=String(v).replace(/[\s€\u00a0\u202f]/g,'').replace(/,/g,'.').replace(/[x×X*]/g,'*').replace(/[÷\/:]/g,'/').replace(/[−–]/g,'-');
+  if(!/^[-+]?\d+(\.\d+)?([-+*\/]\d+(\.\d+)?)*$/.test(s))return null;
+  const t=s.match(/\d+(?:\.\d+)?|[-+*\/]/g);let i=0,sign=1,total=0;
+  if(t[0]==='-'||t[0]==='+'){sign=t[0]==='-'?-1:1;i=1}
+  let term=+t[i++];
+  while(i<t.length){const op=t[i++],n=+t[i++];if(op==='*')term*=n;else if(op==='/'){if(!n)return null;term/=n}else{total+=sign*term;sign=op==='-'?-1:1;term=n}}
+  total+=sign*term;return Number.isFinite(total)?total:null;
+}
+const hasOp=v=>/\d\s*[x×X*÷\/+\-−–]\s*\d/.test(String(v==null?'':v));
+const prettyExpr=v=>String(v).replace(/\s+/g,'').replace(/[x×X*]/g,' × ').replace(/[÷\/]/g,' ÷ ').replace(/\+/g,' + ').replace(/(\d)[-−–](?=\d)/g,'$1 − ');
+const isCalcNote=n=>!!n&&hasOp(n)&&calcExpr(n)!=null;
+const num=v=>{if(v===''||v==null)return null;const e=calcExpr(v);if(e!=null)return e;if(hasOp(v)||/[x×*÷\/+]\s*$/i.test(String(v)))return null;const x=parseFloat(String(v).replace(/[\s€\u00a0\u202f]/g,'').replace(',','.'));return Number.isFinite(x)?x:null};
 const W=()=>!!S.db&&S.canWrite;
 const newId=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
 function todayStr(){const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`}
@@ -792,7 +813,39 @@ async function recordPayments(pid,months,each,date,note){
 /* ---------- sheets ---------- */
 let sheetState=null;
 function openSheet(st){const wasOpen=!!sheetState;sheetState=st;drawSheet();sheetEl.hidden=false;backdrop.hidden=false;sheetEl.scrollTop=0;if(!wasOpen)requestAnimationFrame(()=>requestAnimationFrame(()=>sheetEl.classList.add('open')))}
-function drawSheet(){if(!sheetState)return;sheetBody.innerHTML=sheetState.render();if(sheetState.bind)sheetState.bind(sheetBody)}
+function drawSheet(){if(!sheetState)return;sheetBody.innerHTML=sheetState.render();addCalcKeys(sheetBody);if(sheetState.bind)sheetState.bind(sheetBody)}
+/* Touches de calcul : sous chaque champ data-calc, ou une seule rangée sous un bloc data-calc-host (lignes du questionnaire). */
+let lastCalc=null;
+const CALC_OPS=[['+','plus'],['−','moins'],['×','fois'],['÷','divisé par']];
+function calcKeysHtml(forId){return `<div class="calckeys"${forId?` data-for="${forId}"`:''}>${CALC_OPS.map(([o,l])=>`<button type="button" data-ck="${o}" aria-label="${l}">${o}</button>`).join('')}<span class="calcres" aria-live="polite"></span></div>`}
+function addCalcKeys(root){
+  root.querySelectorAll('input[data-calc]').forEach(inp=>{if(!inp.closest('[data-calc-host]'))inp.insertAdjacentHTML('afterend',calcKeysHtml(inp.id))});
+  root.querySelectorAll('[data-calc-host]').forEach(h=>h.insertAdjacentHTML('afterend',calcKeysHtml('')));
+  root.querySelectorAll('input[data-calc]').forEach(calcShow);
+}
+function calcRow(inp){const h=inp.closest('[data-calc-host]');const r=h?h.nextElementSibling:inp.nextElementSibling;return r&&r.classList.contains('calckeys')?r:null}
+function calcTarget(row){const id=row.dataset.for;if(id)return sheetBody.querySelector('#'+id);if(lastCalc&&sheetBody.contains(lastCalc)&&calcRow(lastCalc)===row)return lastCalc;const h=row.previousElementSibling;const all=h?[...h.querySelectorAll('input[data-calc]')]:[];return all.find(i=>i.value.trim())?all.filter(i=>i.value.trim()).pop():all[0]}
+function calcShow(inp){
+  if(!inp)return;const row=calcRow(inp),out=row&&row.querySelector('.calcres');if(!out)return;
+  if(row.dataset.for===undefined&&lastCalc&&lastCalc!==inp&&calcRow(lastCalc)===row&&sheetBody.contains(lastCalc))return;
+  const v=inp.value,r=calcExpr(v),isC=hasOp(v)||/[x×*÷\/+\-−]\s*$/.test(v.trim());
+  out.textContent=isC?(r!=null?'= '+eur(r2(r)):'calcul à finir'):'';
+  out.classList.toggle('bad',isC&&r==null);
+}
+function calcInsert(inp,op){
+  const v=inp.value,focused=document.activeElement===inp;
+  const a=focused&&inp.selectionStart!=null?inp.selectionStart:v.length,b=focused&&inp.selectionEnd!=null?inp.selectionEnd:v.length;
+  let pre=v.slice(0,a).replace(/\s+$/,'');const post=v.slice(b).replace(/^\s+/,'');
+  if(/[+\-−×x*÷\/]$/i.test(pre))pre=pre.slice(0,-1).replace(/\s+$/,'');
+  if(!pre){inp.focus();toast('Tape d’abord un montant');return}
+  const ins=' '+op+' ';inp.value=pre+ins+post;
+  const pos=(pre+ins).length;inp.focus();try{inp.setSelectionRange(pos,pos)}catch(e){}
+  lastCalc=inp;inp.dispatchEvent(new Event('input',{bubbles:true}));
+}
+sheetBody.addEventListener('pointerdown',e=>{if(e.target.closest('[data-ck]'))e.preventDefault()});
+sheetBody.addEventListener('focusin',e=>{if(e.target.matches&&e.target.matches('input[data-calc]')){lastCalc=e.target;calcShow(e.target)}});
+sheetBody.addEventListener('input',e=>{if(e.target.matches&&e.target.matches('input[data-calc]'))calcShow(e.target)});
+sheetBody.addEventListener('click',e=>{const k=e.target.closest('[data-ck]');if(!k)return;e.preventDefault();const inp=calcTarget(k.closest('.calckeys'));if(inp)calcInsert(inp,k.dataset.ck)});
 function closeSheet(){sheetState=null;sheetEl.classList.remove('open');backdrop.hidden=true;setTimeout(()=>{if(!sheetState){sheetEl.hidden=true;sheetBody.innerHTML=''}},240)}
 backdrop.addEventListener('click',closeSheet);
 $('#sheet-close').addEventListener('click',closeSheet);
@@ -998,12 +1051,7 @@ function overlapNames(c,pid,ms,mem){
   return c.order.filter(id=>id!==pid&&!c.proj[id].passed&&c.proj[id].win.some(m=>ms.includes(m))&&c.proj[id].members.some(i=>mem.has(i))).map(id=>esc(c.proj[id].pr.name));
 }
 /* « 120 x 2 » ou « 120*2 » pour un aller-retour */
-function numExpr(v){
-  if(v==null)return null;
-  const s=String(v).replace(/[\s €]/g,'').replace(/,/g,'.');
-  const m=s.match(/^(\d+(?:\.\d+)?)(?:[x×*](\d+(?:\.\d+)?))?$/i);
-  return m?(m[2]?(+m[1])*(+m[2]):+m[1]):null;
-}
+function numExpr(v){return num(v)}
 /* Premier mois que personne n'a encore payé : un nouveau projet ne reprend pas des versements déjà faits pour un autre. */
 function nextFreeMonth(){const nx=addMonth(todayStr().slice(0,7)),lp=Object.values(S.payments).map(p=>p.month).sort().pop();return lp&&addMonth(lp)>nx?addMonth(lp):nx}
 const TRIP_KINDS=[
@@ -1059,7 +1107,7 @@ function sheetGoal(pid){
       <p class="lead">Les versements des mois choisis iront à ce projet.</p>
       <span class="flabel">Comment préparer ce voyage ?</span>
       ${seg('gl-mode',f.mode,[['expenses','Dépenses'],['monthly','Mensualité'],['goal','Prix total']])}
-      ${f.mode==='goal'?`<div class="field"><label for="gl-g">Prix total du voyage (€)</label><input id="gl-g" inputmode="decimal" value="${esc(f.goal)}" placeholder="ex. 6000"></div>
+      ${f.mode==='goal'?`<div class="field"><label for="gl-g">Prix total du voyage (€)</label><input id="gl-g" inputmode="decimal" data-calc value="${esc(f.goal)}" placeholder="ex. 6000"></div>
       ${plannedTot>0?`<div class="pick sug"><button type="button" data-act="gl-use">Utiliser le total des dépenses prévues : ${eur(plannedTot)}</button></div>`:''}`
       :f.mode==='monthly'?`<div class="field"><label for="gl-p">Chacun met par mois (€)</label><input id="gl-p" inputmode="decimal" value="${esc(f.per)}" placeholder="ex. 150"></div><div id="gl-cr">${crBox()}</div>`
       :`<p class="note" style="margin:-4px 0 12px">Le prix est la somme des dépenses prévues du projet. Il se met à jour quand tu ajoutes ou modifies une dépense.</p>`}
@@ -1155,8 +1203,8 @@ function sheetWizard(){
         const k=kindOf(f.kind),used=new Set(f.lines.map(l=>l.label.trim().toLowerCase()));
         const sug=[...k[2],...k[3]].filter(s=>!used.has(s.toLowerCase()));
         return `${head(3,'Les dépenses prévues')}
-          <p class="lead">Une estimation suffit. Écris « 120 x 2 » pour un aller-retour. Les lignes sans montant sont ignorées.</p>
-          <div id="wz-lines">${f.lines.map((l,i)=>`<div class="line"><input id="wz-l${i}" data-i="${i}" data-k="label" value="${esc(l.label)}" placeholder="Dépense" aria-label="Dépense"><input id="wz-a${i}" data-i="${i}" data-k="amount" inputmode="decimal" value="${esc(l.amount)}" placeholder="€" aria-label="Montant de ${esc(l.label||'la dépense')}"><button type="button" class="x" data-act="wz-rm" data-i="${i}" aria-label="Retirer">×</button></div>`).join('')}</div>
+          <p class="lead">Une estimation suffit. Pour un aller-retour, tape 120, touche × sous les lignes, puis 2. Les lignes sans montant sont ignorées.</p>
+          <div id="wz-lines" data-calc-host>${f.lines.map((l,i)=>`<div class="line"><input id="wz-l${i}" data-i="${i}" data-k="label" value="${esc(l.label)}" placeholder="Dépense" aria-label="Dépense"><input id="wz-a${i}" data-i="${i}" data-k="amount" inputmode="decimal" data-calc value="${esc(l.amount)}" placeholder="€" aria-label="Montant de ${esc(l.label||'la dépense')}"><button type="button" class="x" data-act="wz-rm" data-i="${i}" aria-label="Retirer">×</button></div>`).join('')}</div>
           ${sug.length?`<div class="pick sug">${sug.map(s=>`<button type="button" data-act="wz-add" data-v="${esc(s)}">+ ${esc(s)}</button>`).join('')}</div>`:''}
           <button class="linkbtn" data-act="wz-add" data-v="" style="margin-bottom:12px">+ Autre dépense</button>
           <div class="goalres"><b id="wz-tot">${eur(total())}</b>prix estimé du voyage</div>
@@ -1167,7 +1215,7 @@ function sheetWizard(){
           ${+S.settings.creditMonthly>0&&S.settings.creditEndMonth&&S.settings.creditEndMonth>=f.first?`<p class="note" style="margin:-4px 0 12px">Mets ce que chacun verse en tout. Tant que le crédit court, sa part est retirée du budget du voyage.</p>`:''}
           <div class="actions">${back}<button class="btn" data-act="wz-next">Suivant</button></div>`;
       if(f.step===3)return `${head(3,'Le prix du voyage')}
-          <div class="field"><label for="wz-g">Prix total (€)</label><input id="wz-g" inputmode="decimal" value="${esc(f.goal)}" placeholder="ex. 6000"></div>
+          <div class="field"><label for="wz-g">Prix total (€)</label><input id="wz-g" inputmode="decimal" data-calc value="${esc(f.goal)}" placeholder="ex. 6000"></div>
           <div class="actions">${back}<button class="btn" data-act="wz-next">Suivant</button></div>`;
       return `${head(4,'Les mensualités')}
         <div class="fields2">
@@ -1231,7 +1279,7 @@ function sheetWizard(){
         b.disabled=true;
         const ok=await w(async()=>{
           await S.db.doc('projects/'+id).set(data);
-          for(const l of lines){eo++;await S.db.doc('expenses/'+newId('e')).set({project:id,label:l.label.trim()||'Autre dépense',planned:r2(numExpr(l.amount)),rest:false,closed:false,note:/[x×*]/i.test(l.amount)?String(l.amount).trim():'',order:eo,payments:[]})}
+          for(const l of lines){eo++;await S.db.doc('expenses/'+newId('e')).set({project:id,label:l.label.trim()||'Autre dépense',planned:r2(numExpr(l.amount)),rest:false,closed:false,note:hasOp(l.amount)?prettyExpr(l.amount):'',order:eo,payments:[]})}
         });
         if(ok){S.sel=id;closeSheet();toast('Projet créé');if(route()!=='voyages')location.hash='voyages';else render()}else b.disabled=false;
       }
@@ -1365,9 +1413,9 @@ function sheetExpNew(pid){
       <div class="pick sug">${SUGGEST.map(s=>`<button type="button" data-act="en-sug" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>
       <span class="flabel">Combien ?</span>${seg('en-kind',f.rest?'rest':'fixed',[['fixed','Montant prévu'],['rest','Le reste du pot']])}
       ${f.rest?`<p class="note" style="margin:-4px 0 12px">Cette ligne prend ce qui reste dans la cagnotte pour ce voyage, idéal pour les courses et les restos. Tu notes les dépenses au fur et à mesure.</p>`:`
-      <div class="field"><label for="en-p">Montant prévu (€)</label><input id="en-p" inputmode="decimal" value="${esc(f.planned)}" placeholder="vide si pas encore estimé"></div>
+      <div class="field"><label for="en-p">Montant prévu (€)</label><input id="en-p" inputmode="decimal" data-calc value="${esc(f.planned)}" placeholder="ex. 170 × 2 (vide si pas estimé)"></div>
       <span class="flabel">Déjà payé ?</span>${seg('en-state',f.state,[['none','Rien'],['part','Une partie'],['all','Tout']])}
-      ${f.state==='none'?'':`<div class="fields2">${f.state==='part'?`<div class="field"><label for="en-a">Montant payé (€)</label><input id="en-a" inputmode="decimal" value="${esc(f.paidAmt)}"></div>`:''}<div class="field"><label for="en-d">Payé le</label><input id="en-d" type="date" value="${esc(f.date)}"></div></div>`}`}
+      ${f.state==='none'?'':`<div class="fields2">${f.state==='part'?`<div class="field"><label for="en-a">Montant payé (€)</label><input id="en-a" inputmode="decimal" data-calc value="${esc(f.paidAmt)}"></div>`:''}<div class="field"><label for="en-d">Payé le</label><input id="en-d" type="date" value="${esc(f.date)}"></div></div>`}`}
       <div class="actions"><button class="btn block" data-act="en-save">Ajouter la dépense</button></div>`},
     bind(root){bindInputs(root,{'en-l':'label','en-p':'planned','en-a':'paidAmt','en-d':'date'},f)},
     act:{
@@ -1385,7 +1433,7 @@ function sheetExpNew(pid){
         }
         const order=Math.max(0,...Object.values(S.expenses).map(x=>+x.order||0))+1;
         b.disabled=true;
-        const ok=await w(()=>S.db.doc('expenses/'+newId('e')).set({project:pid,label,planned:planned==null?null:r2(planned),rest:f.rest,closed,note:'',order,payments}));
+        const ok=await w(()=>S.db.doc('expenses/'+newId('e')).set({project:pid,label,planned:planned==null?null:r2(planned),rest:f.rest,closed,note:!f.rest&&hasOp(f.planned)?prettyExpr(f.planned):'',order,payments}));
         if(ok){closeSheet();toast('Dépense ajoutée')}else b.disabled=false;
       }
     }});
@@ -1402,12 +1450,12 @@ function sheetExpDetail(eid){
       const plannedTxt=e.rest?'le reste':e.closed?eur(paid):e.planned==null?'à estimer':eur(e.planned);
       const remTxt=e.closed?eur(0):rem==null?'—':eur(rem);
       const pays=[...(e.payments||[])].sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-      if(editing&&!d)d={label:e.label||'',planned:e.planned==null?'':fmtN(e.planned),rest:!!e.rest};
+      if(editing&&!d)d={label:e.label||'',planned:e.planned==null?'':isCalcNote(e.note)&&Math.abs(calcExpr(e.note)-e.planned)<0.005?e.note:fmtN(e.planned),rest:!!e.rest};
       const main=W()?(e.closed?`<div class="actions"><button class="btn ghost block" data-act="ed-reopen">Rouvrir la dépense</button></div>`:`<div class="actions"><button class="btn" data-act="ed-pay">${e.rest?'Noter une dépense':'Noter un paiement'}</button>${e.rest?'':`<button class="btn ghost" data-act="ed-close">Tout est payé</button>`}</div>`):'';
       const edit=!W()?'':editing?`<h4>Modifier</h4>
         <div class="field"><label for="ed-l">Nom</label><input id="ed-l" value="${esc(d.label)}"></div>
         ${seg('ed-kind',d.rest?'rest':'fixed',[['fixed','Montant prévu'],['rest','Le reste du pot']])}
-        ${d.rest?'':`<div class="field"><label for="ed-p">Montant prévu (€)</label><input id="ed-p" inputmode="decimal" value="${esc(d.planned)}" placeholder="vide si pas encore estimé"></div>`}
+        ${d.rest?'':`<div class="field"><label for="ed-p">Montant prévu (€)</label><input id="ed-p" inputmode="decimal" data-calc value="${esc(d.planned)}" placeholder="ex. 170 × 2 (vide si pas estimé)"></div>`}
         <div class="actions"><button class="btn" data-act="ed-save">Enregistrer</button><button class="btn ghost" data-act="ed-cancel">Annuler</button></div>`
         :`<div class="actions" style="margin-top:14px"><button class="btn ghost block" data-act="ed-edit">Modifier le nom ou le montant prévu</button></div>`;
       return `<h3>${esc(e.label)}</h3>
@@ -1431,7 +1479,11 @@ function sheetExpDetail(eid){
         const label=d.label.trim();if(!label){toast('Donne un nom');return}
         let planned=null;
         if(!d.rest&&String(d.planned).trim()!==''){planned=num(d.planned);if(planned==null||planned<0){toast('Montant prévu invalide');return}}
-        const ok=await w(()=>S.db.doc('expenses/'+eid).update({label,planned:planned==null?null:r2(planned),rest:!!d.rest}),'Enregistré');
+        const upd={label,planned:planned==null?null:r2(planned),rest:!!d.rest},e0=S.expenses[eid];
+        /* le calcul va dans la note, sauf si la note a été écrite à la main */
+        const free=!e0||!e0.note||isCalcNote(e0.note);
+        if(free&&!d.rest&&hasOp(d.planned))upd.note=prettyExpr(d.planned);else if(free&&e0&&e0.note)upd.note='';
+        const ok=await w(()=>S.db.doc('expenses/'+eid).update(upd),'Enregistré');
         if(ok){editing=false;d=null;drawSheet()}
       },
       'ed-rmp':async b=>{
@@ -1456,7 +1508,7 @@ function sheetExpPay(eid,o={}){
     render(){return `<h3>${e0.rest?'Dépense':'Paiement'} · ${esc(e0.label)}</h3>
       <p class="lead">Ce montant sort du livret.${rem0!=null?` Reste à payer : ${eur(rem0)}.`:''}</p>
       <div class="fields2">
-        <div class="field"><label for="xp-a">Montant (€)</label><input id="xp-a" inputmode="decimal" value="${esc(f.amount)}"></div>
+        <div class="field"><label for="xp-a">Montant (€)</label><input id="xp-a" inputmode="decimal" data-calc value="${esc(f.amount)}"></div>
         <div class="field"><label for="xp-d">Payé le</label><input id="xp-d" type="date" value="${esc(f.date)}"></div>
       </div>
       <div class="field"><label for="xp-n">Note (facultatif)</label><input id="xp-n" value="${esc(f.note)}" placeholder="${e0.rest?'ex. courses du samedi':'ex. solde'}"></div>
@@ -1471,7 +1523,7 @@ function sheetExpPay(eid,o={}){
       if(!(a>0)&&!f.close){toast('Indique un montant');return}
       const e=S.expenses[eid];if(!e)return;
       const list=(e.payments||[]).map(x=>Object.assign({},x));
-      if(a>0)list.push({id:newId('p'),amount:r2(a),date:f.date||todayStr(),note:f.note.trim(),recordedAt:new Date().toISOString()});
+      if(a>0)list.push({id:newId('p'),amount:r2(a),date:f.date||todayStr(),note:f.note.trim()||(hasOp(f.amount)?prettyExpr(f.amount):''),recordedAt:new Date().toISOString()});
       const upd={payments:list};if(f.close)upd.closed=true;
       b.disabled=true;
       const ok=await w(()=>S.db.doc('expenses/'+eid).update(upd));
@@ -1806,7 +1858,7 @@ view.addEventListener('change',async e=>{
 });
 
 /* ---------- version et mise à jour ---------- */
-const APP_VERSION='v6 · 8 nov. 2026';
+const APP_VERSION='v7 · 8 nov. 2026';
 /* Vide la copie hors connexion (pas les données) et recharge la dernière version publiée. */
 async function forceUpdate(btn){
   if(btn){btn.disabled=true;btn.textContent='Mise à jour…'}
